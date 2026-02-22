@@ -63,15 +63,15 @@ func TestParserTrivial(t *testing.T) {
 		t.Fatalf("templates mismatch\n got: %#v\nwant: %#v", allTemps, expectedTemps)
 	}
 
-	expectedMasks := map[string]string{
-		"a x1 x2 b": "001101100",
-		"a x2 b":    "001100",
-		"a x3 b":    "001100",
-		"a x4 b":    "001100",
-		"c x1 d":    "001100",
-		"c x2 d":    "001100",
-		"c x3 d":    "001100",
-		"c x4 d":    "001100",
+	expectedMasks := []string{
+		"001101100",
+		"001100",
+		"001100",
+		"001100",
+		"001100",
+		"001100",
+		"001100",
+		"001100",
 	}
 	if !reflect.DeepEqual(masks, expectedMasks) {
 		t.Fatalf("masks mismatch\n got: %#v\nwant: %#v", masks, expectedMasks)
@@ -80,5 +80,25 @@ func TestParserTrivial(t *testing.T) {
 	onlyClusters := parser.Parse(msgs)
 	if !reflect.DeepEqual(onlyClusters, clusters) {
 		t.Fatalf("Parse cluster output drifted")
+	}
+}
+
+func TestParseWithMasksPreservesDuplicates(t *testing.T) {
+	msgs := []string{
+		"svc id=100 path=/a",
+		"svc id=100 path=/a",
+		"svc id=200 path=/b",
+	}
+
+	parser := NewParser()
+	clusters, masks := parser.ParseWithMasks(msgs)
+	if len(clusters) != len(msgs) {
+		t.Fatalf("clusters length mismatch: got %d want %d", len(clusters), len(msgs))
+	}
+	if len(masks) != len(msgs) {
+		t.Fatalf("masks length mismatch: got %d want %d", len(masks), len(msgs))
+	}
+	if masks[0] != masks[1] {
+		t.Fatalf("expected duplicate messages to keep duplicate mask rows: %q vs %q", masks[0], masks[1])
 	}
 }

@@ -1,6 +1,8 @@
 package tipping
 
 import (
+	"fmt"
+	"math"
 	"regexp"
 	"runtime"
 	"sort"
@@ -9,6 +11,7 @@ import (
 )
 
 const allPunctuationSymbols = "!\"#$%&'()*+,-./:;<=>?@[\\]^_`{|}~"
+const defaultThreshold = 0.5
 
 // Parser is a Go implementation of Token Interdependency Parsing.
 type Parser struct {
@@ -24,7 +27,7 @@ type Parser struct {
 // NewParser builds a parser with production-safe defaults.
 func NewParser() *Parser {
 	return &Parser{
-		threshold:        0.5,
+		threshold:        defaultThreshold,
 		specialWhites:    nil,
 		specialBlacks:    nil,
 		symbols:          map[rune]struct{}{},
@@ -34,13 +37,13 @@ func NewParser() *Parser {
 	}
 }
 
-// WithThreshold sets the interdependency threshold in [0,1].
-func (p *Parser) WithThreshold(value float64) *Parser {
-	if value < 0 || value > 1 {
-		panic("threshold must be in [0,1]")
+// SetThreshold validates and sets the interdependency threshold in [0,1].
+func (p *Parser) SetThreshold(value float64) error {
+	if err := validateThreshold(value); err != nil {
+		return err
 	}
 	p.threshold = value
-	return p
+	return nil
 }
 
 // WithSpecialWhites sets regexes that are never parameterized.
@@ -91,21 +94,21 @@ func (p *Parser) ParseWithTemplates(messages []string) ([]int, [][]string) {
 	return clusters, templates
 }
 
-// ParseWithMasks returns cluster IDs and message parameter masks.
-func (p *Parser) ParseWithMasks(messages []string) ([]int, map[string]string) {
+// ParseWithMasks returns cluster IDs and per-message parameter masks.
+func (p *Parser) ParseWithMasks(messages []string) ([]int, []string) {
 	clusters, _, masks := p.parse(messages, false, true)
 	return clusters, masks
 }
 
 // ParseWithTemplatesAndMasks returns cluster IDs, templates, and masks.
-func (p *Parser) ParseWithTemplatesAndMasks(messages []string) ([]int, [][]string, map[string]string) {
+func (p *Parser) ParseWithTemplatesAndMasks(messages []string) ([]int, [][]string, []string) {
 	return p.parse(messages, true, true)
 }
 
-func (p *Parser) parse(messages []string, wantTemplates, wantMasks bool) ([]int, [][]string, map[string]string) {
+func (p *Parser) parse(messages []string, wantTemplates, wantMasks bool) ([]int, [][]string, []string) {
 	if len(messages) == 0 {
 		if wantMasks {
-			return []int{}, [][]string{}, map[string]string{}
+			return []int{}, [][]string{}, []string{}
 		}
 		if wantTemplates {
 			return []int{}, [][]string{}, nil
@@ -127,9 +130,9 @@ func (p *Parser) parse(messages []string, wantTemplates, wantMasks bool) ([]int,
 	if wantTemplates {
 		templates = make([][]string, 0, len(groups))
 	}
-	var masks map[string]string
+	var masks []string
 	if wantMasks {
-		masks = make(map[string]string, len(messages))
+		masks = make([]string, len(messages))
 	}
 
 	var richTokenizer *Tokenizer
@@ -154,10 +157,9 @@ func (p *Parser) parse(messages []string, wantTemplates, wantMasks bool) ([]int,
 				templates = append(templates, templatesForCluster(clusterMsgs, richTokenizer, shared))
 			}
 			if wantMasks {
-				for msg, mask := range parameterMasks(clusterMsgs, richTokenizer, shared) {
-					if _, ok := masks[msg]; !ok {
-						masks[msg] = mask
-					}
+				clusterMasks := parameterMasks(clusterMsgs, richTokenizer, shared)
+				for i, idx := range group.indices {
+					masks[idx] = clusterMasks[i]
 				}
 			}
 		}
@@ -271,4 +273,11 @@ func canonicalAnchorSet(anchors map[string]Token) (string, []Token) {
 		ordered[i] = anchors[id]
 	}
 	return strings.Join(ids, "\x00"), ordered
+}
+
+func validateThreshold(value float64) error {
+	if math.IsNaN(value) || math.IsInf(value, 0) || value < 0 || value > 1 {
+		return fmt.Errorf("threshold must be in [0,1], got %v", value)
+	}
+	return nil
 }

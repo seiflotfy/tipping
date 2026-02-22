@@ -27,9 +27,9 @@ type scenario struct {
 }
 
 type parseOutput struct {
-	Clusters  []int             `json:"clusters"`
-	Templates [][]string        `json:"templates"`
-	Masks     map[string]string `json:"masks"`
+	Clusters  []int      `json:"clusters"`
+	Templates [][]string `json:"templates"`
+	Masks     []string   `json:"masks"`
 }
 
 type canonicalCluster struct {
@@ -40,7 +40,7 @@ type canonicalCluster struct {
 type canonicalOutput struct {
 	Clusters    []canonicalCluster `json:"clusters"`
 	Unclustered []int              `json:"unclustered"`
-	Masks       map[string]string  `json:"masks"`
+	Masks       []string           `json:"masks"`
 }
 
 type oracleInput struct {
@@ -133,13 +133,15 @@ func runGoParser(t *testing.T, sc scenario, messages []string) parseOutput {
 	blackRegexes := compilePatterns(t, sc.specialBlacks)
 
 	p := NewParser().
-		WithThreshold(sc.threshold).
 		WithSymbols(sc.symbols).
 		WithFilterAlphabetic(sc.filterAlphabetic).
 		WithFilterNumeric(sc.filterNumeric).
 		WithFilterImpure(sc.filterImpure).
 		WithSpecialWhites(whiteRegexes).
 		WithSpecialBlacks(blackRegexes)
+	if err := p.SetThreshold(sc.threshold); err != nil {
+		t.Fatalf("set threshold: %v", err)
+	}
 
 	clusters, templates, masks := p.ParseWithTemplatesAndMasks(messages)
 	return parseOutput{Clusters: clusters, Templates: templates, Masks: masks}
@@ -180,7 +182,7 @@ func runGoOracle(t *testing.T, goPath string, sc scenario, messages []string) pa
 		t.Fatalf("decode go oracle output: %v\nraw:\n%s", err, strings.TrimSpace(stdout.String()))
 	}
 	if out.Masks == nil {
-		out.Masks = map[string]string{}
+		out.Masks = []string{}
 	}
 	if out.Templates == nil {
 		out.Templates = [][]string{}
@@ -230,10 +232,7 @@ func canonicalize(out parseOutput) canonicalOutput {
 	})
 	sort.Ints(unclustered)
 
-	masks := make(map[string]string, len(out.Masks))
-	for k, v := range out.Masks {
-		masks[k] = v
-	}
+	masks := append([]string(nil), out.Masks...)
 
 	return canonicalOutput{
 		Clusters:    clusters,
@@ -318,7 +317,7 @@ func readGolden(t *testing.T, path string) canonicalOutput {
 		t.Fatalf("decode golden %s: %v", path, err)
 	}
 	if out.Masks == nil {
-		out.Masks = map[string]string{}
+		out.Masks = []string{}
 	}
 	if out.Clusters == nil {
 		out.Clusters = []canonicalCluster{}
@@ -345,13 +344,9 @@ func writeJSON(t *testing.T, path string, value canonicalOutput) {
 
 func compilePatterns(t *testing.T, patterns []string) []*regexp.Regexp {
 	t.Helper()
-	out := make([]*regexp.Regexp, 0, len(patterns))
-	for _, pattern := range patterns {
-		re, err := regexp.Compile(pattern)
-		if err != nil {
-			t.Fatalf("compile pattern %q: %v", pattern, err)
-		}
-		out = append(out, re)
+	out, err := CompilePatterns(patterns)
+	if err != nil {
+		t.Fatalf("compile patterns: %v", err)
 	}
 	return out
 }

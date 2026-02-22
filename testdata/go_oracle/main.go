@@ -2,12 +2,12 @@ package main
 
 import (
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"os"
-	"regexp"
 
-	"tipping"
+	"github.com/seif/tipping"
 )
 
 type oracleInput struct {
@@ -22,10 +22,12 @@ type oracleInput struct {
 }
 
 type oracleOutput struct {
-	Clusters  []int             `json:"clusters"`
-	Templates [][]string        `json:"templates"`
-	Masks     map[string]string `json:"masks"`
+	Clusters  []int      `json:"clusters"`
+	Templates [][]string `json:"templates"`
+	Masks     []string   `json:"masks"`
 }
+
+const maxOracleInputBytes int64 = 256 * 1024 * 1024
 
 func main() {
 	if err := run(os.Stdin, os.Stdout); err != nil {
@@ -36,27 +38,37 @@ func main() {
 
 func run(in io.Reader, out io.Writer) error {
 	var cfg oracleInput
-	if err := json.NewDecoder(in).Decode(&cfg); err != nil {
+	limited := &io.LimitedReader{R: in, N: maxOracleInputBytes + 1}
+	dec := json.NewDecoder(limited)
+	if err := dec.Decode(&cfg); err != nil {
 		return fmt.Errorf("decode input json: %w", err)
 	}
+	if limited.N == 0 {
+		return fmt.Errorf("decode input json: input exceeds %d bytes", maxOracleInputBytes)
+	}
+	if err := dec.Decode(&struct{}{}); !errors.Is(err, io.EOF) {
+		return fmt.Errorf("decode input json: trailing data")
+	}
 
-	specialWhites, err := compilePatterns(cfg.SpecialWhites)
+	specialWhites, err := tipping.CompilePatterns(cfg.SpecialWhites)
 	if err != nil {
 		return fmt.Errorf("compile special_whites: %w", err)
 	}
-	specialBlacks, err := compilePatterns(cfg.SpecialBlacks)
+	specialBlacks, err := tipping.CompilePatterns(cfg.SpecialBlacks)
 	if err != nil {
 		return fmt.Errorf("compile special_blacks: %w", err)
 	}
 
 	p := tipping.NewParser().
-		WithThreshold(cfg.Threshold).
 		WithSymbols(cfg.Symbols).
 		WithFilterAlphabetic(cfg.FilterAlphabetic).
 		WithFilterNumeric(cfg.FilterNumeric).
 		WithFilterImpure(cfg.FilterImpure).
 		WithSpecialWhites(specialWhites).
 		WithSpecialBlacks(specialBlacks)
+	if err := p.SetThreshold(cfg.Threshold); err != nil {
+		return fmt.Errorf("invalid threshold: %w", err)
+	}
 
 	clusters, templates, masks := p.ParseWithTemplatesAndMasks(cfg.Messages)
 	payload := oracleOutput{
@@ -69,16 +81,4 @@ func run(in io.Reader, out io.Writer) error {
 		return fmt.Errorf("encode output json: %w", err)
 	}
 	return nil
-}
-
-func compilePatterns(patterns []string) ([]*regexp.Regexp, error) {
-	out := make([]*regexp.Regexp, 0, len(patterns))
-	for _, pattern := range patterns {
-		re, err := regexp.Compile(pattern)
-		if err != nil {
-			return nil, err
-		}
-		out = append(out, re)
-	}
-	return out, nil
 }

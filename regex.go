@@ -13,3 +13,16 @@ func CompileIntoRegex(patterns ...string) (*regexp.Regexp, error) {
 	}
 	return regexp.Compile(strings.Join(parts, "|"))
 }
+
+// CompilePatterns compiles each pattern into a regex.
+func CompilePatterns(patterns []string) ([]*regexp.Regexp, error) {
+	out := make([]*regexp.Regexp, 0, len(patterns))
+	for _, pattern := range patterns {
+		re, err := regexp.Compile(pattern)
+		if err != nil {
+			return nil, err
+		}
+		out = append(out, re)
+	}
+	return out, nil
+}

@@ -8,9 +8,8 @@ import (
 	"fmt"
 	"io"
 	"os"
-	"regexp"
 
-	"tipping"
+	"github.com/seif/tipping"
 )
 
 type repeatedString []string
@@ -28,10 +27,16 @@ func (r *repeatedString) Set(v string) error {
 }
 
 type output struct {
-	Clusters  []int             `json:"clusters"`
-	Templates [][]string        `json:"templates,omitempty"`
-	Masks     map[string]string `json:"masks,omitempty"`
+	Clusters  []int      `json:"clusters"`
+	Templates [][]string `json:"templates,omitempty"`
+	Masks     []string   `json:"masks,omitempty"`
 }
+
+const (
+	maxScanTokenBytes = 8 * 1024 * 1024
+	maxInputMessages  = 1_000_000
+	maxInputBytes     = 256 * 1024 * 1024
+)
 
 func main() {
 	if err := run(os.Args[1:], os.Stdin, os.Stdout, os.Stderr); err != nil {
@@ -66,32 +71,30 @@ func run(args []string, stdin io.Reader, stdout, stderr io.Writer) error {
 		return err
 	}
 
-	if *threshold < 0 || *threshold > 1 {
-		return fmt.Errorf("threshold must be in [0,1], got %v", *threshold)
-	}
-
 	messages, err := readMessages(stdin, *inputPath)
 	if err != nil {
 		return err
 	}
 
-	whiteRegexes, err := compileRegexes(specialWhites)
+	whiteRegexes, err := tipping.CompilePatterns(specialWhites)
 	if err != nil {
 		return fmt.Errorf("compile special-white regex: %w", err)
 	}
-	blackRegexes, err := compileRegexes(specialBlacks)
+	blackRegexes, err := tipping.CompilePatterns(specialBlacks)
 	if err != nil {
 		return fmt.Errorf("compile special-black regex: %w", err)
 	}
 
 	p := tipping.NewParser().
-		WithThreshold(*threshold).
 		WithSpecialWhites(whiteRegexes).
 		WithSpecialBlacks(blackRegexes).
 		WithSymbols(*symbols).
 		WithFilterAlphabetic(*filterAlphabetic).
 		WithFilterNumeric(*filterNumeric).
 		WithFilterImpure(*filterImpure)
+	if err := p.SetThreshold(*threshold); err != nil {
+		return err
+	}
 
 	var out output
 	switch {
@@ -124,18 +127,6 @@ func run(args []string, stdin io.Reader, stdout, stderr io.Writer) error {
 	return nil
 }
 
-func compileRegexes(patterns []string) ([]*regexp.Regexp, error) {
-	out := make([]*regexp.Regexp, 0, len(patterns))
-	for _, pattern := range patterns {
-		re, err := regexp.Compile(pattern)
-		if err != nil {
-			return nil, err
-		}
-		out = append(out, re)
-	}
-	return out, nil
-}
-
 func readMessages(stdin io.Reader, inputPath string) ([]string, error) {
 	in := stdin
 	var closer io.Closer
@@ -152,10 +143,19 @@ func readMessages(stdin io.Reader, inputPath string) ([]string, error) {
 	}
 
 	scanner := bufio.NewScanner(in)
-	scanner.Buffer(make([]byte, 0, 64*1024), 8*1024*1024)
+	scanner.Buffer(make([]byte, 0, 64*1024), maxScanTokenBytes)
 	messages := make([]string, 0, 1024)
+	var totalBytes int64
 	for scanner.Scan() {
-		messages = append(messages, scanner.Text())
+		if len(messages) >= maxInputMessages {
+			return nil, fmt.Errorf("read input: message count exceeds %d", maxInputMessages)
+		}
+		line := scanner.Text()
+		totalBytes += int64(len(line))
+		if totalBytes > maxInputBytes {
+			return nil, fmt.Errorf("read input: total input bytes exceed %d", maxInputBytes)
+		}
+		messages = append(messages, line)
 	}
 	if err := scanner.Err(); err != nil {
 		return nil, fmt.Errorf("read input: %w", err)

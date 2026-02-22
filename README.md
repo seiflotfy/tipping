@@ -12,10 +12,8 @@ A pure Go implementation of Token Interdependency Parsing (TiPPing), focused on 
 ## Install
 
 ```bash
-go get <your-module-path>/tipping
+go get github.com/seif/tipping
 ```
-
-Replace `<your-module-path>` with your repository module path before release.
 
 ## Library usage
 
@@ -24,7 +22,7 @@ package main
 
 import (
 	"fmt"
-	"tipping"
+	"github.com/seif/tipping"
 )
 
 func main() {
@@ -65,6 +63,13 @@ For message `msgs[i]`, its matched template set is `templates[clusters[i]]`
 when `clusters[i] >= 0`.
 
 `clusters[i] == -1` means the message was left unclustered.
+
+`ParseWithMasks` returns:
+
+- `clusters []int`: cluster id for each input message index.
+- `masks []string`: parameter mask aligned by input index (`masks[i]` belongs to `msgs[i]`).
+
+Masks are index-aligned, so duplicate input lines remain duplicated in output.
 
 See all options:
 

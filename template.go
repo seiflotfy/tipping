@@ -72,9 +72,9 @@ func templatesForCluster(messages []string, tokenizer *Tokenizer, common map[str
 	return out
 }
 
-func parameterMasks(messages []string, tokenizer *Tokenizer, common map[string]struct{}) map[string]string {
-	masks := make(map[string]string, len(messages))
-	for _, msg := range messages {
+func parameterMasks(messages []string, tokenizer *Tokenizer, common map[string]struct{}) []string {
+	masks := make([]string, len(messages))
+	for i, msg := range messages {
 		toks := tokenizer.Tokenize(msg)
 		mask := make([]byte, 0, len(msg))
 		shouldParameterize := false
@@ -108,7 +108,7 @@ func parameterMasks(messages []string, tokenizer *Tokenizer, common map[string]s
 				}
 			}
 		}
-		masks[msg] = string(mask)
+		masks[i] = string(mask)
 	}
 	return masks
 }

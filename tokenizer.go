@@ -2,6 +2,7 @@ package tipping
 
 import (
 	"regexp"
+	"strings"
 	"unicode"
 	"unicode/utf8"
 )
@@ -25,6 +26,11 @@ type Token struct {
 	Slice string
 }
 
+type tokenKey struct {
+	kind  TokenKind
+	slice string
+}
+
 type preTokenKind uint8
 
 const (
@@ -38,10 +44,15 @@ type preToken struct {
 	slice string
 }
 
+type specialMatcher struct {
+	literal string
+	re      *regexp.Regexp
+}
+
 // Tokenizer applies special regex tokenization followed by symbol/whitespace splitting.
 type Tokenizer struct {
-	specialWhites []*regexp.Regexp
-	specialBlacks []*regexp.Regexp
+	specialWhites []specialMatcher
+	specialBlacks []specialMatcher
 	symbols       map[rune]struct{}
 }
 
@@ -70,19 +81,17 @@ func NewTokenizer(
 	specialBlacks []*regexp.Regexp,
 	symbols map[rune]struct{},
 ) *Tokenizer {
-	whiteCopy := append([]*regexp.Regexp(nil), specialWhites...)
-	blackCopy := append([]*regexp.Regexp(nil), specialBlacks...)
 	return &Tokenizer{
-		specialWhites: whiteCopy,
-		specialBlacks: blackCopy,
+		specialWhites: compileSpecialMatchers(specialWhites),
+		specialBlacks: compileSpecialMatchers(specialBlacks),
 		symbols:       cloneSymbolSet(symbols),
 	}
 }
 
 func (t *Tokenizer) cloneWithSymbols(symbols map[rune]struct{}) *Tokenizer {
 	return &Tokenizer{
-		specialWhites: append([]*regexp.Regexp(nil), t.specialWhites...),
-		specialBlacks: append([]*regexp.Regexp(nil), t.specialBlacks...),
+		specialWhites: append([]specialMatcher(nil), t.specialWhites...),
+		specialBlacks: append([]specialMatcher(nil), t.specialBlacks...),
 		symbols:       cloneSymbolSet(symbols),
 	}
 }
@@ -107,27 +116,27 @@ func (t *Tokenizer) Tokenize(msg string) []Token {
 func (t *Tokenizer) preTokenize(msg string) []preToken {
 	preTokens := []preToken{{kind: preTokenUnrefined, slice: msg}}
 
-	for _, re := range t.specialWhites {
+	for _, matcher := range t.specialWhites {
 		next := make([]preToken, 0, len(preTokens)*2)
 		for _, p := range preTokens {
 			switch p.kind {
 			case preTokenSpecialWhite, preTokenSpecialBlack:
 				next = append(next, p)
 			default:
-				next = append(next, splitSpecial(p.slice, re, preTokenSpecialWhite)...)
+				next = appendSplitSpecial(next, p.slice, matcher, preTokenSpecialWhite)
 			}
 		}
 		preTokens = next
 	}
 
-	for _, re := range t.specialBlacks {
+	for _, matcher := range t.specialBlacks {
 		next := make([]preToken, 0, len(preTokens)*2)
 		for _, p := range preTokens {
 			switch p.kind {
 			case preTokenSpecialWhite, preTokenSpecialBlack:
 				next = append(next, p)
 			default:
-				next = append(next, splitSpecial(p.slice, re, preTokenSpecialBlack)...)
+				next = appendSplitSpecial(next, p.slice, matcher, preTokenSpecialBlack)
 			}
 		}
 		preTokens = next
@@ -136,32 +145,104 @@ func (t *Tokenizer) preTokenize(msg string) []preToken {
 	return preTokens
 }
 
-func splitSpecial(msg string, re *regexp.Regexp, kind preTokenKind) []preToken {
-	indices := re.FindAllStringIndex(msg, -1)
-	if len(indices) == 0 {
-		return []preToken{{kind: preTokenUnrefined, slice: msg}}
-	}
-
-	out := make([]preToken, 0, len(indices)*2+1)
-	last := 0
-	for _, idx := range indices {
-		start, end := idx[0], idx[1]
-		if end-start <= 0 {
+func compileSpecialMatchers(regexes []*regexp.Regexp) []specialMatcher {
+	out := make([]specialMatcher, 0, len(regexes))
+	for _, re := range regexes {
+		pattern := re.String()
+		if literal, ok := literalPattern(pattern); ok {
+			out = append(out, specialMatcher{literal: literal})
 			continue
 		}
-		if start != last {
-			out = append(out, preToken{kind: preTokenUnrefined, slice: msg[last:start]})
-		}
-		out = append(out, preToken{kind: kind, slice: msg[start:end]})
-		last = end
-	}
-	if last != len(msg) {
-		out = append(out, preToken{kind: preTokenUnrefined, slice: msg[last:]})
-	}
-	if len(out) == 0 {
-		return []preToken{{kind: preTokenUnrefined, slice: msg}}
+		out = append(out, specialMatcher{re: re})
 	}
 	return out
+}
+
+func literalPattern(pattern string) (string, bool) {
+	if pattern == "" {
+		return "", false
+	}
+	if regexp.QuoteMeta(pattern) != pattern {
+		return "", false
+	}
+	return pattern, true
+}
+
+func appendSplitSpecial(dst []preToken, msg string, matcher specialMatcher, kind preTokenKind) []preToken {
+	if matcher.literal != "" {
+		return appendSplitSpecialLiteral(dst, msg, matcher.literal, kind)
+	}
+	return appendSplitSpecialRegex(dst, msg, matcher.re, kind)
+}
+
+func appendSplitSpecialRegex(dst []preToken, msg string, re *regexp.Regexp, kind preTokenKind) []preToken {
+	if re == nil {
+		return append(dst, preToken{kind: preTokenUnrefined, slice: msg})
+	}
+	last := 0
+	matched := false
+	for last <= len(msg) {
+		idx := re.FindStringIndex(msg[last:])
+		if idx == nil {
+			break
+		}
+		start := last + idx[0]
+		end := last + idx[1]
+		if end-start <= 0 {
+			if start >= len(msg) {
+				break
+			}
+			_, size := utf8.DecodeRuneInString(msg[start:])
+			if size <= 0 {
+				size = 1
+			}
+			last = start + size
+			continue
+		}
+		matched = true
+		if start > last {
+			dst = append(dst, preToken{kind: preTokenUnrefined, slice: msg[last:start]})
+		}
+		dst = append(dst, preToken{kind: kind, slice: msg[start:end]})
+		last = end
+	}
+	if !matched {
+		return append(dst, preToken{kind: preTokenUnrefined, slice: msg})
+	}
+	if last < len(msg) {
+		dst = append(dst, preToken{kind: preTokenUnrefined, slice: msg[last:]})
+	}
+	return dst
+}
+
+func appendSplitSpecialLiteral(dst []preToken, msg, literal string, kind preTokenKind) []preToken {
+	if literal == "" {
+		return append(dst, preToken{kind: preTokenUnrefined, slice: msg})
+	}
+	count := strings.Count(msg, literal)
+	if count == 0 {
+		return append(dst, preToken{kind: preTokenUnrefined, slice: msg})
+	}
+
+	last := 0
+	litLen := len(literal)
+	for {
+		next := strings.Index(msg[last:], literal)
+		if next < 0 {
+			break
+		}
+		start := last + next
+		if start > last {
+			dst = append(dst, preToken{kind: preTokenUnrefined, slice: msg[last:start]})
+		}
+		end := start + litLen
+		dst = append(dst, preToken{kind: kind, slice: msg[start:end]})
+		last = end
+	}
+	if last < len(msg) {
+		dst = append(dst, preToken{kind: preTokenUnrefined, slice: msg[last:]})
+	}
+	return dst
 }
 
 func splitToken(msg string, symbols map[rune]struct{}) []Token {
@@ -169,7 +250,7 @@ func splitToken(msg string, symbols map[rune]struct{}) []Token {
 		return nil
 	}
 
-	tokens := make([]Token, 0, len(msg))
+	tokens := make([]Token, 0, splitTokenCount(msg, symbols))
 	start := 0
 	for i, r := range msg {
 		_, isSymbol := symbols[r]
@@ -183,7 +264,11 @@ func splitToken(msg string, symbols map[rune]struct{}) []Token {
 		if size < 0 {
 			size = 1
 		}
-		tokens = append(tokens, tokenWith(msg[i:i+size], symbols))
+		kind := TokenSymbolic
+		if unicode.IsSpace(r) {
+			kind = TokenWhitespace
+		}
+		tokens = append(tokens, Token{Kind: kind, Slice: msg[i : i+size]})
 		start = i + size
 	}
 
@@ -192,6 +277,33 @@ func splitToken(msg string, symbols map[rune]struct{}) []Token {
 	}
 
 	return tokens
+}
+
+func splitTokenCount(msg string, symbols map[rune]struct{}) int {
+	if msg == "" {
+		return 0
+	}
+	count := 0
+	start := 0
+	for i, r := range msg {
+		_, isSymbol := symbols[r]
+		if !unicode.IsSpace(r) && !isSymbol {
+			continue
+		}
+		if start < i {
+			count++
+		}
+		count++
+		size := utf8.RuneLen(r)
+		if size < 0 {
+			size = 1
+		}
+		start = i + size
+	}
+	if start < len(msg) {
+		count++
+	}
+	return count
 }
 
 func tokenWith(slice string, symbols map[rune]struct{}) Token {
@@ -226,6 +338,6 @@ func isAll(s string, predicate func(rune) bool) bool {
 	return true
 }
 
-func tokenIdentity(tok Token) string {
-	return string(rune('0'+tok.Kind)) + "\x1f" + tok.Slice
+func tokenKeyFor(tok Token) tokenKey {
+	return tokenKey{kind: tok.Kind, slice: tok.Slice}
 }

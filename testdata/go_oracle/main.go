@@ -7,7 +7,7 @@ import (
 	"io"
 	"os"
 
-	"github.com/seif/tipping"
+	"github.com/seiflotfy/tipping"
 )
 
 type oracleInput struct {

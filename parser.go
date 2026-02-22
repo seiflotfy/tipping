@@ -4,10 +4,8 @@ import (
 	"fmt"
 	"math"
 	"regexp"
-	"runtime"
 	"sort"
 	"strings"
-	"sync"
 )
 
 const allPunctuationSymbols = "!\"#$%&'()*+,-./:;<=>?@[\\]^_`{|}~"
@@ -189,60 +187,20 @@ func groupByAnchorTokens(
 		return nil
 	}
 
-	workers := runtime.GOMAXPROCS(0)
-	if workers < 1 {
-		workers = 1
-	}
-	if workers > len(tokenized) {
-		workers = len(tokenized)
-	}
-
-	jobs := make(chan int)
-	partials := make(chan map[string]*anchorGroup, workers)
-
-	var wg sync.WaitGroup
-	for i := 0; i < workers; i++ {
-		wg.Add(1)
-		go func() {
-			defer wg.Done()
-			local := make(map[string]*anchorGroup)
-			for idx := range jobs {
-				anchors := anchorTokens(tokenized[idx], idep, threshold)
-				key, ordered := canonicalAnchorSet(anchors)
-				g, ok := local[key]
-				if !ok {
-					g = &anchorGroup{key: key, anchors: ordered}
-					local[key] = g
-				}
-				g.indices = append(g.indices, idx)
+	merged := make(map[string]*anchorGroup, len(tokenized))
+	scratch := newAnchorScratch()
+	for idx := range tokenized {
+		anchors := anchorTokens(tokenized[idx], idep, threshold, scratch)
+		key, ordered := canonicalAnchorSet(anchors)
+		group, ok := merged[key]
+		if !ok {
+			group = &anchorGroup{
+				key:     key,
+				anchors: append([]Token(nil), ordered...),
 			}
-			partials <- local
-		}()
-	}
-
-	go func() {
-		for i := range tokenized {
-			jobs <- i
+			merged[key] = group
 		}
-		close(jobs)
-		wg.Wait()
-		close(partials)
-	}()
-
-	merged := make(map[string]*anchorGroup)
-	for partial := range partials {
-		for key, group := range partial {
-			existing, ok := merged[key]
-			if !ok {
-				merged[key] = &anchorGroup{
-					key:     key,
-					anchors: append([]Token(nil), group.anchors...),
-					indices: append([]int(nil), group.indices...),
-				}
-				continue
-			}
-			existing.indices = append(existing.indices, group.indices...)
-		}
+		group.indices = append(group.indices, idx)
 	}
 
 	groups := make([]anchorGroup, 0, len(merged))
@@ -259,54 +217,43 @@ func groupByAnchorTokens(
 
 func tokenizeMessages(messages []string, tokenizer *Tokenizer) [][]Token {
 	tokenized := make([][]Token, len(messages))
-	if len(messages) == 0 {
-		return tokenized
-	}
-
-	workers := runtime.GOMAXPROCS(0)
-	if workers < 1 {
-		workers = 1
-	}
-	if workers > len(messages) {
-		workers = len(messages)
-	}
-
-	jobs := make(chan int)
-	var wg sync.WaitGroup
-	for i := 0; i < workers; i++ {
-		wg.Add(1)
-		go func() {
-			defer wg.Done()
-			for idx := range jobs {
-				tokenized[idx] = tokenizer.Tokenize(messages[idx])
-			}
-		}()
-	}
-
 	for i := range messages {
-		jobs <- i
+		tokenized[i] = tokenizer.Tokenize(messages[i])
 	}
-	close(jobs)
-	wg.Wait()
-
 	return tokenized
 }
 
-func canonicalAnchorSet(anchors map[string]Token) (string, []Token) {
+func canonicalAnchorSet(anchors map[tokenKey]Token) (string, []Token) {
 	if len(anchors) == 0 {
 		return "", nil
 	}
-	ids := make([]string, 0, len(anchors))
-	for id := range anchors {
-		ids = append(ids, id)
+	keys := make([]tokenKey, 0, len(anchors))
+	for k := range anchors {
+		keys = append(keys, k)
 	}
-	sort.Strings(ids)
+	sort.Sort(tokenKeyList(keys))
 
-	ordered := make([]Token, len(ids))
-	for i, id := range ids {
-		ordered[i] = anchors[id]
+	ordered := make([]Token, len(keys))
+	var b strings.Builder
+	for i, k := range keys {
+		ordered[i] = anchors[k]
+		b.WriteByte(byte(k.kind))
+		b.WriteByte('\x1f')
+		b.WriteString(k.slice)
+		b.WriteByte('\x00')
 	}
-	return strings.Join(ids, "\x00"), ordered
+	return b.String(), ordered
+}
+
+type tokenKeyList []tokenKey
+
+func (l tokenKeyList) Len() int      { return len(l) }
+func (l tokenKeyList) Swap(i, j int) { l[i], l[j] = l[j], l[i] }
+func (l tokenKeyList) Less(i, j int) bool {
+	if l[i].kind != l[j].kind {
+		return l[i].kind < l[j].kind
+	}
+	return l[i].slice < l[j].slice
 }
 
 func validateThreshold(value float64) error {

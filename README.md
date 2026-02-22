@@ -12,7 +12,7 @@ A pure Go implementation of Token Interdependency Parsing (TiPPing), focused on 
 ## Install
 
 ```bash
-go get github.com/seif/tipping
+go get github.com/seiflotfy/tipping
 ```
 
 ## Library usage
@@ -22,7 +22,7 @@ package main
 
 import (
 	"fmt"
-	"github.com/seif/tipping"
+	"github.com/seiflotfy/tipping"
 )
 
 func main() {

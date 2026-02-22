@@ -7,50 +7,65 @@ func sharedSlices(tokenized [][]Token, filter staticFilter) map[string]struct{} 
 		return map[string]struct{}{}
 	}
 
-	var shared map[string]struct{}
-	for i, toks := range tokenized {
-		set := make(map[string]struct{})
+	shared := make(map[string]struct{}, len(tokenized[0]))
+	for _, tok := range tokenized[0] {
+		if commonCandidate(tok, filter) {
+			shared[tok.Slice] = struct{}{}
+		}
+	}
+	if len(tokenized) == 1 || len(shared) == 0 {
+		return shared
+	}
+
+	seenEpoch := make(map[string]uint32, len(shared))
+	epoch := uint32(1)
+	for i := 1; i < len(tokenized); i++ {
+		toks := tokenized[i]
+
 		for _, tok := range toks {
-			switch tok.Kind {
-			case TokenSpecialWhite, TokenWhitespace, TokenSymbolic:
-				set[tok.Slice] = struct{}{}
-			case TokenAlphabetic:
-				if filter.alphabetic {
-					set[tok.Slice] = struct{}{}
-				}
-			case TokenNumeric:
-				if filter.numeric {
-					set[tok.Slice] = struct{}{}
-				}
-			case TokenImpure:
-				if filter.impure {
-					set[tok.Slice] = struct{}{}
-				}
+			if !commonCandidate(tok, filter) {
+				continue
+			}
+			if _, ok := shared[tok.Slice]; ok {
+				seenEpoch[tok.Slice] = epoch
 			}
 		}
 
-		if i == 0 {
-			shared = set
-			continue
-		}
 		for slice := range shared {
-			if _, ok := set[slice]; !ok {
+			if seenEpoch[slice] != epoch {
 				delete(shared, slice)
 			}
 		}
 		if len(shared) == 0 {
 			break
 		}
+		epoch++
+		if epoch == 0 {
+			clear(seenEpoch)
+			epoch = 1
+		}
 	}
 
-	if shared == nil {
-		return map[string]struct{}{}
-	}
 	return shared
 }
 
+func commonCandidate(tok Token, filter staticFilter) bool {
+	switch tok.Kind {
+	case TokenSpecialWhite, TokenWhitespace, TokenSymbolic:
+		return true
+	case TokenAlphabetic:
+		return filter.alphabetic
+	case TokenNumeric:
+		return filter.numeric
+	case TokenImpure:
+		return filter.impure
+	default:
+		return false
+	}
+}
+
 func templatesForCluster(tokenized [][]Token, common map[string]struct{}) []string {
-	set := make(map[string]struct{})
+	set := make(map[string]struct{}, len(tokenized))
 	for _, toks := range tokenized {
 		template := make([]byte, 0, tokenLength(toks)+8)
 		for _, tok := range toks {

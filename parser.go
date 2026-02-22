@@ -228,13 +228,16 @@ func canonicalAnchorSet(anchors map[tokenKey]Token) (string, []Token) {
 		return "", nil
 	}
 	keys := make([]tokenKey, 0, len(anchors))
+	totalLen := 0
 	for k := range anchors {
 		keys = append(keys, k)
+		totalLen += len(k.slice) + 3
 	}
 	sort.Sort(tokenKeyList(keys))
 
 	ordered := make([]Token, len(keys))
 	var b strings.Builder
+	b.Grow(totalLen)
 	for i, k := range keys {
 		ordered[i] = anchors[k]
 		b.WriteByte(byte(k.kind))

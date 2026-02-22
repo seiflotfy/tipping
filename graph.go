@@ -2,9 +2,9 @@ package tipping
 
 type anchorScratch struct {
 	nodes     []Token
-	nodeIndex map[tokenKey]int
-	outDeg    []int
-	inDeg     []int
+	nodeIndex map[tokenKey]struct{}
+	occ       []uint32
+	occThresh []float64
 	adj       [][]int
 	rev       [][]int
 	order     []int
@@ -16,7 +16,7 @@ type anchorScratch struct {
 
 func newAnchorScratch() *anchorScratch {
 	return &anchorScratch{
-		nodeIndex: make(map[tokenKey]int),
+		nodeIndex: make(map[tokenKey]struct{}),
 		anchors:   make(map[tokenKey]Token),
 	}
 }
@@ -26,14 +26,14 @@ func anchorTokens(tokens []Token, idep *tokenRecord, threshold float64, scratch 
 	nodeIndex := scratch.nodeIndex
 	clear(nodeIndex)
 	for _, tok := range tokens {
-		if _, ok := idep.occurrence(tok.Slice); !ok {
+		if _, ok := idep.occ[tok.Slice]; !ok {
 			continue
 		}
 		id := tokenKeyFor(tok)
 		if _, ok := nodeIndex[id]; ok {
 			continue
 		}
-		nodeIndex[id] = len(nodes)
+		nodeIndex[id] = struct{}{}
 		nodes = append(nodes, tok)
 	}
 	scratch.nodes = nodes
@@ -57,49 +57,45 @@ func anchorTokens(tokens []Token, idep *tokenRecord, threshold float64, scratch 
 		return anchors
 	}
 
-	outDeg := ensureIntBuffer(scratch.outDeg, n)
-	inDeg := ensureIntBuffer(scratch.inDeg, n)
-	clear(outDeg)
-	clear(inDeg)
-	scratch.outDeg = outDeg
-	scratch.inDeg = inDeg
-
-	for i := 0; i < n; i++ {
-		for j := i + 1; j < n; j++ {
-			if dep, ok := idep.dependency(nodes[i].Slice, nodes[j].Slice); ok && dep > threshold {
-				outDeg[i]++
-				inDeg[j]++
-			}
-			if dep, ok := idep.dependency(nodes[j].Slice, nodes[i].Slice); ok && dep > threshold {
-				outDeg[j]++
-				inDeg[i]++
-			}
-		}
-	}
-
 	adj := ensureEdgeBuffer(scratch.adj, n)
 	rev := ensureEdgeBuffer(scratch.rev, n)
 	scratch.adj = adj
 	scratch.rev = rev
-	for i := 0; i < n; i++ {
-		if outDeg[i] > 0 {
-			if cap(adj[i]) < outDeg[i] {
-				adj[i] = make([]int, 0, outDeg[i])
-			}
-		}
-		if inDeg[i] > 0 {
-			if cap(rev[i]) < inDeg[i] {
-				rev[i] = make([]int, 0, inDeg[i])
-			}
-		}
+
+	occ := scratch.occ
+	if cap(occ) < n {
+		occ = make([]uint32, n)
+	} else {
+		occ = occ[:n]
 	}
+	for i := range occ {
+		occ[i] = idep.occ[nodes[i].Slice]
+	}
+	scratch.occ = occ
+
+	occThresh := scratch.occThresh
+	if cap(occThresh) < n {
+		occThresh = make([]float64, n)
+	} else {
+		occThresh = occThresh[:n]
+	}
+	for i := range occThresh {
+		occThresh[i] = float64(occ[i]) * threshold
+	}
+	scratch.occThresh = occThresh
+
 	for i := 0; i < n; i++ {
 		for j := i + 1; j < n; j++ {
-			if dep, ok := idep.dependency(nodes[i].Slice, nodes[j].Slice); ok && dep > threshold {
+			co, ok := idep.co[newTokenPair(nodes[i].Slice, nodes[j].Slice)]
+			if !ok {
+				continue
+			}
+			cof := float64(co)
+			if cof > occThresh[i] {
 				adj[i] = append(adj[i], j)
 				rev[j] = append(rev[j], i)
 			}
-			if dep, ok := idep.dependency(nodes[j].Slice, nodes[i].Slice); ok && dep > threshold {
+			if cof > occThresh[j] {
 				adj[j] = append(adj[j], i)
 				rev[i] = append(rev[i], j)
 			}
@@ -168,13 +164,6 @@ func anchorTokens(tokens []Token, idep *tokenRecord, threshold float64, scratch 
 	}
 
 	return anchors
-}
-
-func ensureIntBuffer(buf []int, n int) []int {
-	if cap(buf) < n {
-		return make([]int, n)
-	}
-	return buf[:n]
 }
 
 func ensureBoolBuffer(buf []bool, n int) []bool {

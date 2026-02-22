@@ -120,7 +120,7 @@ func (p *Parser) parse(messages []string, wantTemplates, wantMasks bool) ([]int,
 	filter := newStaticFilter(p.filterAlphabetic, p.filterNumeric, p.filterImpure)
 	tokenized := tokenizeMessages(messages, tokenizer)
 	idep := newTokenRecord(tokenized, filter)
-	groups := groupByAnchorTokens(tokenized, idep, p.threshold)
+	groups := groupByAnchorTokens(tokenized, idep, p.threshold, wantTemplates || wantMasks)
 
 	clusters := make([]int, len(messages))
 	for i := range clusters {
@@ -187,10 +187,16 @@ type anchorGroup struct {
 	indices []int
 }
 
+type canonicalScratch struct {
+	keys    []tokenKey
+	ordered []Token
+}
+
 func groupByAnchorTokens(
 	tokenized [][]Token,
 	idep *tokenRecord,
 	threshold float64,
+	lowAlloc bool,
 ) []anchorGroup {
 	if len(tokenized) == 0 {
 		return nil
@@ -198,14 +204,23 @@ func groupByAnchorTokens(
 
 	merged := make(map[string]*anchorGroup, len(tokenized))
 	scratch := newAnchorScratch()
+	canonical := &canonicalScratch{}
 	for idx := range tokenized {
 		anchors := anchorTokens(tokenized[idx], idep, threshold, scratch)
-		key, ordered := canonicalAnchorSet(anchors)
+		var key string
+		var ordered []Token
+		if lowAlloc {
+			key, ordered = canonicalAnchorSet(anchors, canonical)
+		} else {
+			key, ordered = canonicalAnchorSetFast(anchors)
+		}
 		group, ok := merged[key]
 		if !ok {
+			groupAnchors := make([]Token, len(ordered))
+			copy(groupAnchors, ordered)
 			group = &anchorGroup{
 				key:     key,
-				anchors: append([]Token(nil), ordered...),
+				anchors: groupAnchors,
 			}
 			merged[key] = group
 		}
@@ -241,17 +256,25 @@ func retokenizeMessagesWithSymbols(tokenized [][]Token, symbols map[rune]struct{
 }
 
 func retokenizeTokensWithSymbols(tokens []Token, symbols map[rune]struct{}) []Token {
+	start := -1
+	for i, tok := range tokens {
+		if tok.Kind == TokenImpure && tokenNeedsSplit(tok.Slice, symbols) {
+			start = i
+			break
+		}
+	}
+	if start < 0 {
+		return tokens
+	}
+
 	out := make([]Token, 0, len(tokens)*2)
-	for _, tok := range tokens {
+	out = append(out, tokens[:start]...)
+	for _, tok := range tokens[start:] {
 		switch tok.Kind {
 		case TokenSpecialWhite, TokenSpecialBlack, TokenWhitespace, TokenSymbolic, TokenAlphabetic, TokenNumeric:
 			out = append(out, tok)
 		default:
-			if !tokenNeedsSplit(tok.Slice, symbols) {
-				out = append(out, tok)
-				continue
-			}
-			out = append(out, splitToken(tok.Slice, symbols)...)
+			out = appendSplitToken(out, tok.Slice, symbols)
 		}
 	}
 	return out
@@ -282,7 +305,42 @@ func symbolSetEqual(a, b map[rune]struct{}) bool {
 	return symbolSetSubset(a, b)
 }
 
-func canonicalAnchorSet(anchors map[tokenKey]Token) (string, []Token) {
+func canonicalAnchorSet(anchors map[tokenKey]Token, scratch *canonicalScratch) (string, []Token) {
+	if len(anchors) == 0 {
+		scratch.keys = scratch.keys[:0]
+		scratch.ordered = scratch.ordered[:0]
+		return "", scratch.ordered
+	}
+	keys := scratch.keys[:0]
+	totalLen := 0
+	for k := range anchors {
+		keys = append(keys, k)
+		totalLen += len(k.slice) + 3
+	}
+	sort.Sort(tokenKeyList(keys))
+	scratch.keys = keys
+
+	ordered := scratch.ordered
+	if cap(ordered) < len(keys) {
+		ordered = make([]Token, len(keys))
+	} else {
+		ordered = ordered[:len(keys)]
+	}
+
+	var b strings.Builder
+	b.Grow(totalLen)
+	for i, k := range keys {
+		ordered[i] = anchors[k]
+		b.WriteByte(byte(k.kind))
+		b.WriteByte('\x1f')
+		b.WriteString(k.slice)
+		b.WriteByte('\x00')
+	}
+	scratch.ordered = ordered
+	return b.String(), ordered
+}
+
+func canonicalAnchorSetFast(anchors map[tokenKey]Token) (string, []Token) {
 	if len(anchors) == 0 {
 		return "", nil
 	}

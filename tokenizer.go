@@ -99,6 +99,18 @@ func (t *Tokenizer) cloneWithSymbols(symbols map[rune]struct{}) *Tokenizer {
 // Tokenize splits a log message into typed tokens.
 func (t *Tokenizer) Tokenize(msg string) []Token {
 	pre := t.preTokenize(msg)
+	if len(pre) == 1 {
+		switch pre[0].kind {
+		case preTokenSpecialWhite:
+			return []Token{{Kind: TokenSpecialWhite, Slice: pre[0].slice}}
+		case preTokenSpecialBlack:
+			return []Token{{Kind: TokenSpecialBlack, Slice: pre[0].slice}}
+		default:
+			tokens := make([]Token, 0, len(pre[0].slice)/2+1)
+			return appendSplitToken(tokens, pre[0].slice, t.symbols)
+		}
+	}
+
 	tokens := make([]Token, 0, len(pre)*2)
 	for _, p := range pre {
 		switch p.kind {
@@ -107,7 +119,7 @@ func (t *Tokenizer) Tokenize(msg string) []Token {
 		case preTokenSpecialBlack:
 			tokens = append(tokens, Token{Kind: TokenSpecialBlack, Slice: p.slice})
 		default:
-			tokens = append(tokens, splitToken(p.slice, t.symbols)...)
+			tokens = appendSplitToken(tokens, p.slice, t.symbols)
 		}
 	}
 	return tokens
@@ -249,8 +261,14 @@ func splitToken(msg string, symbols map[rune]struct{}) []Token {
 	if msg == "" {
 		return nil
 	}
-
 	tokens := make([]Token, 0, splitTokenCount(msg, symbols))
+	return appendSplitToken(tokens, msg, symbols)
+}
+
+func appendSplitToken(tokens []Token, msg string, symbols map[rune]struct{}) []Token {
+	if msg == "" {
+		return tokens
+	}
 	start := 0
 	for i, r := range msg {
 		_, isSymbol := symbols[r]

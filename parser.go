@@ -24,6 +24,24 @@ type Parser struct {
 	filterImpure     bool
 }
 
+// ParseBuffers holds reusable memory for repeated parse calls.
+// It is not safe for concurrent use.
+type ParseBuffers struct {
+	Clusters  []int
+	Templates [][]string
+	Masks     []string
+
+	tokenized        [][]Token
+	richTokenized    [][]Token
+	clusterTokens    [][]Token
+	tokenScratch     tokenizationScratch
+	richTokenScratch tokenizationScratch
+}
+
+func NewParseBuffers() *ParseBuffers {
+	return &ParseBuffers{}
+}
+
 // NewParser builds a parser with production-safe defaults.
 func NewParser() *Parser {
 	return &Parser{
@@ -84,29 +102,60 @@ func (p *Parser) WithFilterImpure(value bool) *Parser {
 
 // Parse returns cluster IDs (-1 means unclustered).
 func (p *Parser) Parse(messages []string) []int {
-	clusters, _, _ := p.parse(messages, false, false)
+	clusters, _, _ := p.parse(messages, false, false, nil)
 	return clusters
 }
 
 // ParseWithTemplates returns cluster IDs and per-cluster templates.
 func (p *Parser) ParseWithTemplates(messages []string) ([]int, [][]string) {
-	clusters, templates, _ := p.parse(messages, true, false)
+	clusters, templates, _ := p.parse(messages, true, false, nil)
 	return clusters, templates
 }
 
 // ParseWithMasks returns cluster IDs and per-message parameter masks.
 func (p *Parser) ParseWithMasks(messages []string) ([]int, []string) {
-	clusters, _, masks := p.parse(messages, false, true)
+	clusters, _, masks := p.parse(messages, false, true, nil)
 	return clusters, masks
 }
 
 // ParseWithTemplatesAndMasks returns cluster IDs, templates, and masks.
 func (p *Parser) ParseWithTemplatesAndMasks(messages []string) ([]int, [][]string, []string) {
-	return p.parse(messages, true, true)
+	return p.parse(messages, true, true, nil)
 }
 
-func (p *Parser) parse(messages []string, wantTemplates, wantMasks bool) ([]int, [][]string, []string) {
+func (p *Parser) ParseInto(messages []string, buffers *ParseBuffers) []int {
+	clusters, _, _ := p.parse(messages, false, false, buffers)
+	return clusters
+}
+
+func (p *Parser) ParseWithTemplatesInto(messages []string, buffers *ParseBuffers) ([]int, [][]string) {
+	clusters, templates, _ := p.parse(messages, true, false, buffers)
+	return clusters, templates
+}
+
+func (p *Parser) ParseWithMasksInto(messages []string, buffers *ParseBuffers) ([]int, []string) {
+	clusters, _, masks := p.parse(messages, false, true, buffers)
+	return clusters, masks
+}
+
+func (p *Parser) ParseWithTemplatesAndMasksInto(messages []string, buffers *ParseBuffers) ([]int, [][]string, []string) {
+	return p.parse(messages, true, true, buffers)
+}
+
+func (p *Parser) parse(messages []string, wantTemplates, wantMasks bool, buffers *ParseBuffers) ([]int, [][]string, []string) {
 	if len(messages) == 0 {
+		if buffers != nil {
+			buffers.Clusters = buffers.Clusters[:0]
+			buffers.Templates = buffers.Templates[:0]
+			buffers.Masks = buffers.Masks[:0]
+			if wantMasks {
+				return buffers.Clusters, buffers.Templates, buffers.Masks
+			}
+			if wantTemplates {
+				return buffers.Clusters, buffers.Templates, nil
+			}
+			return buffers.Clusters, nil, nil
+		}
 		if wantMasks {
 			return []int{}, [][]string{}, []string{}
 		}
@@ -118,22 +167,44 @@ func (p *Parser) parse(messages []string, wantTemplates, wantMasks bool) ([]int,
 
 	tokenizer := NewTokenizer(p.specialWhites, p.specialBlacks, p.symbols)
 	filter := newStaticFilter(p.filterAlphabetic, p.filterNumeric, p.filterImpure)
-	tokenized := tokenizeMessages(messages, tokenizer)
+	var tokenized [][]Token
+	if buffers != nil {
+		tokenized = tokenizeMessagesInto(messages, tokenizer, buffers.tokenized, &buffers.tokenScratch)
+		buffers.tokenized = tokenized
+	} else {
+		tokenized = tokenizeMessages(messages, tokenizer)
+	}
 	idep := newTokenRecord(tokenized, filter)
 	groups := groupByAnchorTokens(tokenized, idep, p.threshold, wantTemplates || wantMasks)
 
-	clusters := make([]int, len(messages))
-	for i := range clusters {
-		clusters[i] = -1
+	var clusters []int
+	if buffers != nil {
+		clusters = ensureIntSliceWithValue(buffers.Clusters, len(messages), -1)
+		buffers.Clusters = clusters
+	} else {
+		clusters = make([]int, len(messages))
+		for i := range clusters {
+			clusters[i] = -1
+		}
 	}
 
 	var templates [][]string
 	if wantTemplates {
-		templates = make([][]string, 0, len(groups))
+		if buffers != nil {
+			templates = buffers.Templates[:0]
+		} else {
+			templates = make([][]string, 0, len(groups))
+		}
 	}
 	var masks []string
 	if wantMasks {
-		masks = make([]string, len(messages))
+		if buffers != nil {
+			masks = ensureStringSlice(buffers.Masks, len(messages))
+			clear(masks)
+			buffers.Masks = masks
+		} else {
+			masks = make([]string, len(messages))
+		}
 	}
 
 	var richTokenized [][]Token
@@ -142,10 +213,20 @@ func (p *Parser) parse(messages []string, wantTemplates, wantMasks bool) ([]int,
 		if canReuse && symbolSetEqual(p.symbols, allPunctuationSymbolSet) {
 			richTokenized = tokenized
 		} else if canReuse {
-			richTokenized = retokenizeMessagesWithSymbols(tokenized, allPunctuationSymbolSet)
+			if buffers != nil {
+				richTokenized = retokenizeMessagesWithSymbolsInto(tokenized, allPunctuationSymbolSet, buffers.richTokenized)
+				buffers.richTokenized = richTokenized
+			} else {
+				richTokenized = retokenizeMessagesWithSymbols(tokenized, allPunctuationSymbolSet)
+			}
 		} else {
 			richTokenizer := tokenizer.cloneWithSymbols(allPunctuationSymbolSet)
-			richTokenized = tokenizeMessages(messages, richTokenizer)
+			if buffers != nil {
+				richTokenized = tokenizeMessagesInto(messages, richTokenizer, buffers.richTokenized, &buffers.richTokenScratch)
+				buffers.richTokenized = richTokenized
+			} else {
+				richTokenized = tokenizeMessages(messages, richTokenizer)
+			}
 		}
 	}
 
@@ -156,7 +237,16 @@ func (p *Parser) parse(messages []string, wantTemplates, wantMasks bool) ([]int,
 		}
 
 		if wantTemplates || wantMasks {
-			clusterTokens := make([][]Token, len(group.indices))
+			var clusterTokens [][]Token
+			if buffers != nil {
+				if cap(buffers.clusterTokens) < len(group.indices) {
+					buffers.clusterTokens = make([][]Token, len(group.indices))
+				}
+				clusterTokens = buffers.clusterTokens[:len(group.indices)]
+				buffers.clusterTokens = clusterTokens
+			} else {
+				clusterTokens = make([][]Token, len(group.indices))
+			}
 			for i, idx := range group.indices {
 				clusterTokens[i] = richTokenized[idx]
 			}
@@ -178,6 +268,10 @@ func (p *Parser) parse(messages []string, wantTemplates, wantMasks bool) ([]int,
 		cid++
 	}
 
+	if buffers != nil {
+		buffers.Templates = templates
+		buffers.Masks = masks
+	}
 	return clusters, templates, masks
 }
 
@@ -240,22 +334,53 @@ func groupByAnchorTokens(
 }
 
 func tokenizeMessages(messages []string, tokenizer *Tokenizer) [][]Token {
-	tokenized := make([][]Token, len(messages))
+	return tokenizeMessagesInto(messages, tokenizer, nil, nil)
+}
+
+func tokenizeMessagesInto(
+	messages []string,
+	tokenizer *Tokenizer,
+	dst [][]Token,
+	scratch *tokenizationScratch,
+) [][]Token {
+	tokenized := dst
+	if cap(tokenized) < len(messages) {
+		tokenized = make([][]Token, len(messages))
+	} else {
+		tokenized = tokenized[:len(messages)]
+	}
 	for i := range messages {
-		tokenized[i] = tokenizer.Tokenize(messages[i])
+		tokenized[i] = tokenizer.TokenizeInto(messages[i], tokenized[i], scratch)
 	}
 	return tokenized
 }
 
 func retokenizeMessagesWithSymbols(tokenized [][]Token, symbols map[rune]struct{}) [][]Token {
-	out := make([][]Token, len(tokenized))
+	return retokenizeMessagesWithSymbolsInto(tokenized, symbols, nil)
+}
+
+func retokenizeMessagesWithSymbolsInto(
+	tokenized [][]Token,
+	symbols map[rune]struct{},
+	dst [][]Token,
+) [][]Token {
+	out := dst
+	if cap(out) < len(tokenized) {
+		out = make([][]Token, len(tokenized))
+	} else {
+		out = out[:len(tokenized)]
+	}
 	for i := range tokenized {
-		out[i] = retokenizeTokensWithSymbols(tokenized[i], symbols)
+		out[i] = retokenizeTokensWithSymbolsInto(tokenized[i], symbols, out[i])
 	}
 	return out
 }
 
 func retokenizeTokensWithSymbols(tokens []Token, symbols map[rune]struct{}) []Token {
+	return retokenizeTokensWithSymbolsInto(tokens, symbols, nil)
+}
+
+func retokenizeTokensWithSymbolsInto(tokens []Token, symbols map[rune]struct{}, dst []Token) []Token {
 	start := -1
 	for i, tok := range tokens {
 		if tok.Kind == TokenImpure && tokenNeedsSplit(tok.Slice, symbols) {
@@ -267,7 +392,10 @@ func retokenizeTokensWithSymbols(tokens []Token, symbols map[rune]struct{}) []To
 		return tokens
 	}
 
-	out := make([]Token, 0, len(tokens)*2)
+	out := dst[:0]
+	if cap(out) < len(tokens)*2 {
+		out = make([]Token, 0, len(tokens)*2)
+	}
 	out = append(out, tokens[:start]...)
 	for _, tok := range tokens[start:] {
 		switch tok.Kind {
@@ -278,6 +406,25 @@ func retokenizeTokensWithSymbols(tokens []Token, symbols map[rune]struct{}) []To
 		}
 	}
 	return out
+}
+
+func ensureIntSliceWithValue(buf []int, n int, value int) []int {
+	if cap(buf) < n {
+		buf = make([]int, n)
+	} else {
+		buf = buf[:n]
+	}
+	for i := range buf {
+		buf[i] = value
+	}
+	return buf
+}
+
+func ensureStringSlice(buf []string, n int) []string {
+	if cap(buf) < n {
+		return make([]string, n)
+	}
+	return buf[:n]
 }
 
 func tokenNeedsSplit(slice string, symbols map[rune]struct{}) bool {

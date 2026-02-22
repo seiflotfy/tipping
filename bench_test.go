@@ -32,6 +32,17 @@ func BenchmarkParseDefault4K(b *testing.B) {
 	}
 }
 
+func BenchmarkParseDefault4KReuseBuffers(b *testing.B) {
+	p := NewParser()
+	p.WithFilterAlphabetic(true)
+	bufs := NewParseBuffers()
+	b.ReportAllocs()
+	b.ResetTimer()
+	for i := 0; i < b.N; i++ {
+		benchClusters = p.ParseInto(benchDefault4K, bufs)
+	}
+}
+
 func BenchmarkParseWithTemplatesAndMasksDefault4K(b *testing.B) {
 	p := NewParser()
 	p.WithFilterAlphabetic(true)
@@ -39,6 +50,17 @@ func BenchmarkParseWithTemplatesAndMasksDefault4K(b *testing.B) {
 	b.ResetTimer()
 	for i := 0; i < b.N; i++ {
 		benchClusters, benchTemplates, benchMasks = p.ParseWithTemplatesAndMasks(benchDefault4K)
+	}
+}
+
+func BenchmarkParseWithTemplatesAndMasksDefault4KReuseBuffers(b *testing.B) {
+	p := NewParser()
+	p.WithFilterAlphabetic(true)
+	bufs := NewParseBuffers()
+	b.ReportAllocs()
+	b.ResetTimer()
+	for i := 0; i < b.N; i++ {
+		benchClusters, benchTemplates, benchMasks = p.ParseWithTemplatesAndMasksInto(benchDefault4K, bufs)
 	}
 }
 
@@ -62,6 +84,30 @@ func BenchmarkParseWithTemplatesAndMasksSpecial4K(b *testing.B) {
 	b.ResetTimer()
 	for i := 0; i < b.N; i++ {
 		benchClusters, benchTemplates, benchMasks = p.ParseWithTemplatesAndMasks(benchSpecial4K)
+	}
+}
+
+func BenchmarkParseWithTemplatesAndMasksSpecial4KReuseBuffers(b *testing.B) {
+	white, err := CompilePatterns([]string{`Fan`, `Temp`})
+	if err != nil {
+		b.Fatalf("compile special whites: %v", err)
+	}
+	black, err := CompilePatterns([]string{`\d+\.\d+`})
+	if err != nil {
+		b.Fatalf("compile special blacks: %v", err)
+	}
+
+	p := NewParser().
+		WithSymbols(".").
+		WithFilterAlphabetic(true).
+		WithSpecialWhites(white).
+		WithSpecialBlacks(black)
+	bufs := NewParseBuffers()
+
+	b.ReportAllocs()
+	b.ResetTimer()
+	for i := 0; i < b.N; i++ {
+		benchClusters, benchTemplates, benchMasks = p.ParseWithTemplatesAndMasksInto(benchSpecial4K, bufs)
 	}
 }
 

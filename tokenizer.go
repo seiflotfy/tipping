@@ -56,6 +56,11 @@ type Tokenizer struct {
 	symbols       map[rune]struct{}
 }
 
+type tokenizationScratch struct {
+	pre  []preToken
+	next []preToken
+}
+
 func newSymbolSet(symbols string) map[rune]struct{} {
 	if symbols == "" {
 		return map[rune]struct{}{}
@@ -98,38 +103,85 @@ func (t *Tokenizer) cloneWithSymbols(symbols map[rune]struct{}) *Tokenizer {
 
 // Tokenize splits a log message into typed tokens.
 func (t *Tokenizer) Tokenize(msg string) []Token {
-	pre := t.preTokenize(msg)
+	return t.TokenizeInto(msg, nil, nil)
+}
+
+func (t *Tokenizer) TokenizeInto(msg string, dst []Token, scratch *tokenizationScratch) []Token {
+	pre := t.preTokenizeInto(msg, scratch)
+	out := dst[:0]
 	if len(pre) == 1 {
 		switch pre[0].kind {
 		case preTokenSpecialWhite:
-			return []Token{{Kind: TokenSpecialWhite, Slice: pre[0].slice}}
+			return append(out, Token{Kind: TokenSpecialWhite, Slice: pre[0].slice})
 		case preTokenSpecialBlack:
-			return []Token{{Kind: TokenSpecialBlack, Slice: pre[0].slice}}
+			return append(out, Token{Kind: TokenSpecialBlack, Slice: pre[0].slice})
 		default:
-			tokens := make([]Token, 0, len(pre[0].slice)/2+1)
-			return appendSplitToken(tokens, pre[0].slice, t.symbols)
+			if cap(out) == 0 {
+				out = make([]Token, 0, len(pre[0].slice)/2+1)
+			}
+			return appendSplitToken(out, pre[0].slice, t.symbols)
 		}
 	}
 
-	tokens := make([]Token, 0, len(pre)*2)
+	if cap(out) == 0 {
+		out = make([]Token, 0, len(pre)*2)
+	}
 	for _, p := range pre {
 		switch p.kind {
 		case preTokenSpecialWhite:
-			tokens = append(tokens, Token{Kind: TokenSpecialWhite, Slice: p.slice})
+			out = append(out, Token{Kind: TokenSpecialWhite, Slice: p.slice})
 		case preTokenSpecialBlack:
-			tokens = append(tokens, Token{Kind: TokenSpecialBlack, Slice: p.slice})
+			out = append(out, Token{Kind: TokenSpecialBlack, Slice: p.slice})
 		default:
-			tokens = appendSplitToken(tokens, p.slice, t.symbols)
+			out = appendSplitToken(out, p.slice, t.symbols)
 		}
 	}
-	return tokens
+	return out
 }
 
 func (t *Tokenizer) preTokenize(msg string) []preToken {
-	preTokens := []preToken{{kind: preTokenUnrefined, slice: msg}}
+	return t.preTokenizeInto(msg, nil)
+}
+
+func (t *Tokenizer) preTokenizeInto(msg string, scratch *tokenizationScratch) []preToken {
+	if scratch == nil {
+		preTokens := []preToken{{kind: preTokenUnrefined, slice: msg}}
+
+		for _, matcher := range t.specialWhites {
+			next := make([]preToken, 0, len(preTokens)*2)
+			for _, p := range preTokens {
+				switch p.kind {
+				case preTokenSpecialWhite, preTokenSpecialBlack:
+					next = append(next, p)
+				default:
+					next = appendSplitSpecial(next, p.slice, matcher, preTokenSpecialWhite)
+				}
+			}
+			preTokens = next
+		}
+
+		for _, matcher := range t.specialBlacks {
+			next := make([]preToken, 0, len(preTokens)*2)
+			for _, p := range preTokens {
+				switch p.kind {
+				case preTokenSpecialWhite, preTokenSpecialBlack:
+					next = append(next, p)
+				default:
+					next = appendSplitSpecial(next, p.slice, matcher, preTokenSpecialBlack)
+				}
+			}
+			preTokens = next
+		}
+
+		return preTokens
+	}
+
+	preTokens := scratch.pre[:0]
+	preTokens = append(preTokens, preToken{kind: preTokenUnrefined, slice: msg})
+	next := scratch.next[:0]
 
 	for _, matcher := range t.specialWhites {
-		next := make([]preToken, 0, len(preTokens)*2)
+		next = next[:0]
 		for _, p := range preTokens {
 			switch p.kind {
 			case preTokenSpecialWhite, preTokenSpecialBlack:
@@ -138,11 +190,11 @@ func (t *Tokenizer) preTokenize(msg string) []preToken {
 				next = appendSplitSpecial(next, p.slice, matcher, preTokenSpecialWhite)
 			}
 		}
-		preTokens = next
+		preTokens, next = next, preTokens
 	}
 
 	for _, matcher := range t.specialBlacks {
-		next := make([]preToken, 0, len(preTokens)*2)
+		next = next[:0]
 		for _, p := range preTokens {
 			switch p.kind {
 			case preTokenSpecialWhite, preTokenSpecialBlack:
@@ -151,9 +203,11 @@ func (t *Tokenizer) preTokenize(msg string) []preToken {
 				next = appendSplitSpecial(next, p.slice, matcher, preTokenSpecialBlack)
 			}
 		}
-		preTokens = next
+		preTokens, next = next, preTokens
 	}
 
+	scratch.pre = preTokens
+	scratch.next = next
 	return preTokens
 }
 

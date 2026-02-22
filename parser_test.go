@@ -102,3 +102,42 @@ func TestParseWithMasksPreservesDuplicates(t *testing.T) {
 		t.Fatalf("expected duplicate messages to keep duplicate mask rows: %q vs %q", masks[0], masks[1])
 	}
 }
+
+func TestParseIntoParity(t *testing.T) {
+	msgs := []string{
+		"a x1 x2 b",
+		"a x2 b",
+		"a x3 b",
+		"a x4 b",
+		"c x1 d",
+		"c x2 d",
+	}
+
+	parser := NewParser()
+	bufs := NewParseBuffers()
+
+	wantClusters, wantTemplates, wantMasks := parser.ParseWithTemplatesAndMasks(msgs)
+	gotClusters, gotTemplates, gotMasks := parser.ParseWithTemplatesAndMasksInto(msgs, bufs)
+	if !reflect.DeepEqual(gotClusters, wantClusters) {
+		t.Fatalf("clusters mismatch\n got: %#v\nwant: %#v", gotClusters, wantClusters)
+	}
+	if !reflect.DeepEqual(gotTemplates, wantTemplates) {
+		t.Fatalf("templates mismatch\n got: %#v\nwant: %#v", gotTemplates, wantTemplates)
+	}
+	if !reflect.DeepEqual(gotMasks, wantMasks) {
+		t.Fatalf("masks mismatch\n got: %#v\nwant: %#v", gotMasks, wantMasks)
+	}
+
+	short := msgs[:2]
+	wantClusters, wantTemplates, wantMasks = parser.ParseWithTemplatesAndMasks(short)
+	gotClusters, gotTemplates, gotMasks = parser.ParseWithTemplatesAndMasksInto(short, bufs)
+	if !reflect.DeepEqual(gotClusters, wantClusters) {
+		t.Fatalf("short clusters mismatch\n got: %#v\nwant: %#v", gotClusters, wantClusters)
+	}
+	if !reflect.DeepEqual(gotTemplates, wantTemplates) {
+		t.Fatalf("short templates mismatch\n got: %#v\nwant: %#v", gotTemplates, wantTemplates)
+	}
+	if !reflect.DeepEqual(gotMasks, wantMasks) {
+		t.Fatalf("short masks mismatch\n got: %#v\nwant: %#v", gotMasks, wantMasks)
+	}
+}

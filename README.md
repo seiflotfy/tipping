@@ -40,6 +40,23 @@ func main() {
 }
 ```
 
+### Low-allocation repeated parsing
+
+If you parse many batches with the same parser config, reuse buffers:
+
+```go
+bufs := tipping.NewParseBuffers()
+
+for _, batch := range batches {
+	clusters, templates, masks := parser.ParseWithTemplatesAndMasksInto(batch, bufs)
+	_ = clusters
+	_ = templates
+	_ = masks
+}
+```
+
+This reuses internal token/mask/template buffers across calls.
+
 ## CLI usage
 
 ```bash
@@ -107,6 +124,12 @@ Run parser/tokenizer benchmarks:
 
 ```bash
 go test -run '^$' -bench Benchmark -benchmem ./...
+```
+
+Compare reusable-buffer APIs:
+
+```bash
+go test -run '^$' -bench 'ReuseBuffers' -benchmem .
 ```
 
 Capture CPU + memory profiles for the heaviest parser benchmark:

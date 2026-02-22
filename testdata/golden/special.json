@@ -1,0 +1,29 @@
+{
+  "clusters": [
+    {
+      "indices": [
+        0,
+        1
+      ],
+      "templates": [
+        "Fan fan_\u003c*\u003e speed is set to \u003c*\u003e on machine sys.node.fan_\u003c*\u003e on node \u003c*\u003e"
+      ]
+    },
+    {
+      "indices": [
+        2,
+        3
+      ],
+      "templates": [
+        "Temp sensor_\u003c*\u003e is \u003c*\u003e C"
+      ]
+    }
+  ],
+  "unclustered": [],
+  "masks": {
+    "Fan fan_2 speed is set to 12.3114 on machine sys.node.fan_3 on node 12": "0000000010000000000000000011111110000000000000000000000000100000000011",
+    "Fan fan_7 speed is set to 73.9901 on machine sys.node.fan_8 on node 12": "0000000010000000000000000011111110000000000000000000000000100000000011",
+    "Temp sensor_1 is 99.4 C": "00000000000010000111100",
+    "Temp sensor_2 is 88.3 C": "00000000000010000111100"
+  }
+}

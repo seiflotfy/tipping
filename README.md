@@ -54,6 +54,18 @@ go run ./cmd/tipping -input logs.txt -output result.json -templates
 
 If you also want masks, add `-masks`.
 
+## Matching semantics
+
+`ParseWithTemplates` returns:
+
+- `clusters []int`: cluster id for each input message index.
+- `templates [][]string`: template set per cluster id.
+
+For message `msgs[i]`, its matched template set is `templates[clusters[i]]`
+when `clusters[i] >= 0`.
+
+`clusters[i] == -1` means the message was left unclustered.
+
 See all options:
 
 ```bash

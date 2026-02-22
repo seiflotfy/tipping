@@ -141,7 +141,7 @@ func (p *Parser) parse(messages []string, wantTemplates, wantMasks bool) ([]int,
 		canReuse := symbolSetSubset(p.symbols, allPunctuationSymbolSet)
 		if canReuse && symbolSetEqual(p.symbols, allPunctuationSymbolSet) {
 			richTokenized = tokenized
-		} else if canReuse && (len(p.specialWhites) > 0 || len(p.specialBlacks) > 0) {
+		} else if canReuse {
 			richTokenized = retokenizeMessagesWithSymbols(tokenized, allPunctuationSymbolSet)
 		} else {
 			richTokenizer := tokenizer.cloneWithSymbols(allPunctuationSymbolSet)

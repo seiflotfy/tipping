@@ -27,19 +27,19 @@ type tokenRecordPartial struct {
 	co  map[tokenPair]uint32
 }
 
-func newTokenRecord(messages []string, tokenizer *Tokenizer, filter staticFilter) *tokenRecord {
+func newTokenRecord(tokenized [][]Token, filter staticFilter) *tokenRecord {
 	workers := runtime.GOMAXPROCS(0)
 	if workers < 1 {
 		workers = 1
 	}
-	if workers > len(messages) && len(messages) > 0 {
-		workers = len(messages)
+	if workers > len(tokenized) && len(tokenized) > 0 {
+		workers = len(tokenized)
 	}
-	if len(messages) == 0 {
+	if len(tokenized) == 0 {
 		return &tokenRecord{occ: map[string]uint32{}, co: map[tokenPair]uint32{}}
 	}
 
-	jobs := make(chan string)
+	jobs := make(chan int)
 	parts := make(chan tokenRecordPartial, workers)
 
 	var wg sync.WaitGroup
@@ -49,8 +49,8 @@ func newTokenRecord(messages []string, tokenizer *Tokenizer, filter staticFilter
 			defer wg.Done()
 			localOcc := make(map[string]uint32)
 			localCo := make(map[tokenPair]uint32)
-			for msg := range jobs {
-				toks := uniqueFilteredTokenSlices(msg, tokenizer, filter)
+			for idx := range jobs {
+				toks := uniqueFilteredTokenSlices(tokenized[idx], filter)
 				for _, tok := range toks {
 					localOcc[tok]++
 				}
@@ -65,8 +65,8 @@ func newTokenRecord(messages []string, tokenizer *Tokenizer, filter staticFilter
 	}
 
 	go func() {
-		for _, msg := range messages {
-			jobs <- msg
+		for i := range tokenized {
+			jobs <- i
 		}
 		close(jobs)
 		wg.Wait()
@@ -86,10 +86,10 @@ func newTokenRecord(messages []string, tokenizer *Tokenizer, filter staticFilter
 	return record
 }
 
-func uniqueFilteredTokenSlices(msg string, tokenizer *Tokenizer, filter staticFilter) []string {
+func uniqueFilteredTokenSlices(tokens []Token, filter staticFilter) []string {
 	seenTokens := make(map[string]struct{})
 	toks := make(map[string]struct{})
-	for _, tok := range tokenizer.Tokenize(msg) {
+	for _, tok := range tokens {
 		id := tokenIdentity(tok)
 		if _, ok := seenTokens[id]; ok {
 			continue

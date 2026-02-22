@@ -1,3 +1,3 @@
-module github.com/seif/tipping
+module github.com/seiflotfy/tipping
 
 go 1.22

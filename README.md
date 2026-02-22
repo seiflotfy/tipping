@@ -100,3 +100,20 @@ TIPPING_UPDATE_GOLDEN=1 go test ./... -run TestGoldenParity
 # Update and verify against the Go oracle
 TIPPING_UPDATE_GOLDEN=1 TIPPING_VERIFY_GO_ORACLE=1 go test ./... -run TestGoldenParity
 ```
+
+## Benchmarks and profiling
+
+Run parser/tokenizer benchmarks:
+
+```bash
+go test -run '^$' -bench Benchmark -benchmem ./...
+```
+
+Capture CPU + memory profiles for the heaviest parser benchmark:
+
+```bash
+go test -run '^$' -bench '^BenchmarkParseWithTemplatesAndMasksSpecial4K$' -benchmem -benchtime=3s -cpu 1 -cpuprofile cpu.out -memprofile mem.out .
+go tool pprof -top cpu.out
+go tool pprof -top -alloc_space mem.out
+go tool pprof -top -alloc_objects mem.out
+```

@@ -2,15 +2,15 @@ package tipping
 
 import "sort"
 
-func sharedSlices(messages []string, tokenizer *Tokenizer, filter staticFilter) map[string]struct{} {
-	if len(messages) == 0 {
+func sharedSlices(tokenized [][]Token, filter staticFilter) map[string]struct{} {
+	if len(tokenized) == 0 {
 		return map[string]struct{}{}
 	}
 
 	var shared map[string]struct{}
-	for i, msg := range messages {
+	for i, toks := range tokenized {
 		set := make(map[string]struct{})
-		for _, tok := range tokenizer.Tokenize(msg) {
+		for _, tok := range toks {
 			switch tok.Kind {
 			case TokenSpecialWhite, TokenWhitespace, TokenSymbolic:
 				set[tok.Slice] = struct{}{}
@@ -49,11 +49,10 @@ func sharedSlices(messages []string, tokenizer *Tokenizer, filter staticFilter) 
 	return shared
 }
 
-func templatesForCluster(messages []string, tokenizer *Tokenizer, common map[string]struct{}) []string {
+func templatesForCluster(tokenized [][]Token, common map[string]struct{}) []string {
 	set := make(map[string]struct{})
-	for _, msg := range messages {
-		toks := tokenizer.Tokenize(msg)
-		template := make([]byte, 0, len(msg)+8)
+	for _, toks := range tokenized {
+		template := make([]byte, 0, tokenLength(toks)+8)
 		for _, tok := range toks {
 			if _, ok := common[tok.Slice]; ok {
 				template = append(template, tok.Slice...)
@@ -72,11 +71,10 @@ func templatesForCluster(messages []string, tokenizer *Tokenizer, common map[str
 	return out
 }
 
-func parameterMasks(messages []string, tokenizer *Tokenizer, common map[string]struct{}) []string {
-	masks := make([]string, len(messages))
-	for i, msg := range messages {
-		toks := tokenizer.Tokenize(msg)
-		mask := make([]byte, 0, len(msg))
+func parameterMasks(tokenized [][]Token, common map[string]struct{}) []string {
+	masks := make([]string, len(tokenized))
+	for i, toks := range tokenized {
+		mask := make([]byte, 0, tokenLength(toks))
 		shouldParameterize := false
 		for idx, tok := range toks {
 			switch tok.Kind {
@@ -111,6 +109,14 @@ func parameterMasks(messages []string, tokenizer *Tokenizer, common map[string]s
 		masks[i] = string(mask)
 	}
 	return masks
+}
+
+func tokenLength(tokens []Token) int {
+	n := 0
+	for _, tok := range tokens {
+		n += len(tok.Slice)
+	}
+	return n
 }
 
 func isBoundaryToken(tokens []Token, idx int) bool {

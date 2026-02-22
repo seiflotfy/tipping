@@ -118,8 +118,9 @@ func (p *Parser) parse(messages []string, wantTemplates, wantMasks bool) ([]int,
 
 	tokenizer := NewTokenizer(p.specialWhites, p.specialBlacks, p.symbols)
 	filter := newStaticFilter(p.filterAlphabetic, p.filterNumeric, p.filterImpure)
-	idep := newTokenRecord(messages, tokenizer, filter)
-	groups := groupByAnchorTokens(messages, tokenizer, idep, p.threshold)
+	tokenized := tokenizeMessages(messages, tokenizer)
+	idep := newTokenRecord(tokenized, filter)
+	groups := groupByAnchorTokens(tokenized, idep, p.threshold)
 
 	clusters := make([]int, len(messages))
 	for i := range clusters {
@@ -135,9 +136,10 @@ func (p *Parser) parse(messages []string, wantTemplates, wantMasks bool) ([]int,
 		masks = make([]string, len(messages))
 	}
 
-	var richTokenizer *Tokenizer
+	var richTokenized [][]Token
 	if wantTemplates || wantMasks {
-		richTokenizer = tokenizer.cloneWithSymbols(newSymbolSet(allPunctuationSymbols))
+		richTokenizer := tokenizer.cloneWithSymbols(newSymbolSet(allPunctuationSymbols))
+		richTokenized = tokenizeMessages(messages, richTokenizer)
 	}
 
 	cid := 0
@@ -146,18 +148,17 @@ func (p *Parser) parse(messages []string, wantTemplates, wantMasks bool) ([]int,
 			continue
 		}
 
-		clusterMsgs := make([]string, len(group.indices))
-		for i, idx := range group.indices {
-			clusterMsgs[i] = messages[idx]
-		}
-
 		if wantTemplates || wantMasks {
-			shared := sharedSlices(clusterMsgs, richTokenizer, filter)
+			clusterTokens := make([][]Token, len(group.indices))
+			for i, idx := range group.indices {
+				clusterTokens[i] = richTokenized[idx]
+			}
+			shared := sharedSlices(clusterTokens, filter)
 			if wantTemplates {
-				templates = append(templates, templatesForCluster(clusterMsgs, richTokenizer, shared))
+				templates = append(templates, templatesForCluster(clusterTokens, shared))
 			}
 			if wantMasks {
-				clusterMasks := parameterMasks(clusterMsgs, richTokenizer, shared)
+				clusterMasks := parameterMasks(clusterTokens, shared)
 				for i, idx := range group.indices {
 					masks[idx] = clusterMasks[i]
 				}
@@ -180,12 +181,11 @@ type anchorGroup struct {
 }
 
 func groupByAnchorTokens(
-	messages []string,
-	tokenizer *Tokenizer,
+	tokenized [][]Token,
 	idep *tokenRecord,
 	threshold float64,
 ) []anchorGroup {
-	if len(messages) == 0 {
+	if len(tokenized) == 0 {
 		return nil
 	}
 
@@ -193,8 +193,8 @@ func groupByAnchorTokens(
 	if workers < 1 {
 		workers = 1
 	}
-	if workers > len(messages) {
-		workers = len(messages)
+	if workers > len(tokenized) {
+		workers = len(tokenized)
 	}
 
 	jobs := make(chan int)
@@ -207,8 +207,7 @@ func groupByAnchorTokens(
 			defer wg.Done()
 			local := make(map[string]*anchorGroup)
 			for idx := range jobs {
-				tokens := tokenizer.Tokenize(messages[idx])
-				anchors := anchorTokens(tokens, idep, threshold)
+				anchors := anchorTokens(tokenized[idx], idep, threshold)
 				key, ordered := canonicalAnchorSet(anchors)
 				g, ok := local[key]
 				if !ok {
@@ -222,7 +221,7 @@ func groupByAnchorTokens(
 	}
 
 	go func() {
-		for i := range messages {
+		for i := range tokenized {
 			jobs <- i
 		}
 		close(jobs)
@@ -256,6 +255,41 @@ func groupByAnchorTokens(
 	})
 
 	return groups
+}
+
+func tokenizeMessages(messages []string, tokenizer *Tokenizer) [][]Token {
+	tokenized := make([][]Token, len(messages))
+	if len(messages) == 0 {
+		return tokenized
+	}
+
+	workers := runtime.GOMAXPROCS(0)
+	if workers < 1 {
+		workers = 1
+	}
+	if workers > len(messages) {
+		workers = len(messages)
+	}
+
+	jobs := make(chan int)
+	var wg sync.WaitGroup
+	for i := 0; i < workers; i++ {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			for idx := range jobs {
+				tokenized[idx] = tokenizer.Tokenize(messages[idx])
+			}
+		}()
+	}
+
+	for i := range messages {
+		jobs <- i
+	}
+	close(jobs)
+	wg.Wait()
+
+	return tokenized
 }
 
 func canonicalAnchorSet(anchors map[string]Token) (string, []Token) {

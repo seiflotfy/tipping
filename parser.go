@@ -11,6 +11,8 @@ import (
 const allPunctuationSymbols = "!\"#$%&'()*+,-./:;<=>?@[\\]^_`{|}~"
 const defaultThreshold = 0.5
 
+var allPunctuationSymbolSet = newSymbolSet(allPunctuationSymbols)
+
 // Parser is a Go implementation of Token Interdependency Parsing.
 type Parser struct {
 	threshold        float64
@@ -136,8 +138,15 @@ func (p *Parser) parse(messages []string, wantTemplates, wantMasks bool) ([]int,
 
 	var richTokenized [][]Token
 	if wantTemplates || wantMasks {
-		richTokenizer := tokenizer.cloneWithSymbols(newSymbolSet(allPunctuationSymbols))
-		richTokenized = tokenizeMessages(messages, richTokenizer)
+		canReuse := symbolSetSubset(p.symbols, allPunctuationSymbolSet)
+		if canReuse && symbolSetEqual(p.symbols, allPunctuationSymbolSet) {
+			richTokenized = tokenized
+		} else if canReuse && (len(p.specialWhites) > 0 || len(p.specialBlacks) > 0) {
+			richTokenized = retokenizeMessagesWithSymbols(tokenized, allPunctuationSymbolSet)
+		} else {
+			richTokenizer := tokenizer.cloneWithSymbols(allPunctuationSymbolSet)
+			richTokenized = tokenizeMessages(messages, richTokenizer)
+		}
 	}
 
 	cid := 0
@@ -221,6 +230,56 @@ func tokenizeMessages(messages []string, tokenizer *Tokenizer) [][]Token {
 		tokenized[i] = tokenizer.Tokenize(messages[i])
 	}
 	return tokenized
+}
+
+func retokenizeMessagesWithSymbols(tokenized [][]Token, symbols map[rune]struct{}) [][]Token {
+	out := make([][]Token, len(tokenized))
+	for i := range tokenized {
+		out[i] = retokenizeTokensWithSymbols(tokenized[i], symbols)
+	}
+	return out
+}
+
+func retokenizeTokensWithSymbols(tokens []Token, symbols map[rune]struct{}) []Token {
+	out := make([]Token, 0, len(tokens)*2)
+	for _, tok := range tokens {
+		switch tok.Kind {
+		case TokenSpecialWhite, TokenSpecialBlack, TokenWhitespace, TokenSymbolic, TokenAlphabetic, TokenNumeric:
+			out = append(out, tok)
+		default:
+			if !tokenNeedsSplit(tok.Slice, symbols) {
+				out = append(out, tok)
+				continue
+			}
+			out = append(out, splitToken(tok.Slice, symbols)...)
+		}
+	}
+	return out
+}
+
+func tokenNeedsSplit(slice string, symbols map[rune]struct{}) bool {
+	for _, r := range slice {
+		if _, ok := symbols[r]; ok {
+			return true
+		}
+	}
+	return false
+}
+
+func symbolSetSubset(sub, sup map[rune]struct{}) bool {
+	for r := range sub {
+		if _, ok := sup[r]; !ok {
+			return false
+		}
+	}
+	return true
+}
+
+func symbolSetEqual(a, b map[rune]struct{}) bool {
+	if len(a) != len(b) {
+		return false
+	}
+	return symbolSetSubset(a, b)
 }
 
 func canonicalAnchorSet(anchors map[tokenKey]Token) (string, []Token) {

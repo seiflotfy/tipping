@@ -1,30 +1,36 @@
 package tipping
 
-type tokenPair struct {
-	a string
-	b string
+type tokenPairID struct {
+	a uint32
+	b uint32
 }
 
-func newTokenPair(t1, t2 string) tokenPair {
+func newTokenPairID(t1, t2 uint32) tokenPairID {
 	if t1 > t2 {
-		return tokenPair{a: t1, b: t2}
+		return tokenPairID{a: t1, b: t2}
 	}
-	return tokenPair{a: t2, b: t1}
+	return tokenPairID{a: t2, b: t1}
 }
 
 type tokenRecord struct {
-	occ map[string]uint32
-	co  map[tokenPair]uint32
+	tokenID map[string]uint32
+	occ     map[uint32]uint32
+	co      map[tokenPairID]uint32
 }
 
 type tokenSliceScratch struct {
 	seen map[tokenKey]struct{}
 	toks map[string]struct{}
 	out  []string
+	ids  []uint32
 }
 
 func newTokenRecord(tokenized [][]Token, filter staticFilter) *tokenRecord {
-	record := &tokenRecord{occ: map[string]uint32{}, co: map[tokenPair]uint32{}}
+	record := &tokenRecord{
+		tokenID: map[string]uint32{},
+		occ:     map[uint32]uint32{},
+		co:      map[tokenPairID]uint32{},
+	}
 	if len(tokenized) == 0 {
 		return record
 	}
@@ -35,12 +41,16 @@ func newTokenRecord(tokenized [][]Token, filter staticFilter) *tokenRecord {
 	}
 	for idx := range tokenized {
 		toks := uniqueFilteredTokenSlicesWithScratch(tokenized[idx], filter, &scratch)
+		ids := scratch.ids[:0]
 		for _, tok := range toks {
-			record.occ[tok]++
+			id := record.internToken(tok)
+			ids = append(ids, id)
+			record.occ[id]++
 		}
-		for i := 0; i < len(toks); i++ {
-			for j := i + 1; j < len(toks); j++ {
-				record.co[newTokenPair(toks[i], toks[j])]++
+		scratch.ids = ids
+		for i := 0; i < len(ids); i++ {
+			for j := i + 1; j < len(ids); j++ {
+				record.co[newTokenPairID(ids[i], ids[j])]++
 			}
 		}
 	}
@@ -80,18 +90,44 @@ func uniqueFilteredTokenSlicesWithScratch(tokens []Token, filter staticFilter, s
 }
 
 func (tr *tokenRecord) occurrence(tok string) (uint32, bool) {
-	count, ok := tr.occ[tok]
+	id, ok := tr.tokenID[tok]
+	if !ok {
+		return 0, false
+	}
+	count, ok := tr.occ[id]
 	return count, ok
 }
 
 func (tr *tokenRecord) dependency(evidence, condition string) (float64, bool) {
-	double, ok := tr.co[newTokenPair(evidence, condition)]
+	evidenceID, ok := tr.tokenID[evidence]
 	if !ok {
 		return 0, false
 	}
-	single, ok := tr.occ[evidence]
+	conditionID, ok := tr.tokenID[condition]
+	if !ok {
+		return 0, false
+	}
+	double, ok := tr.co[newTokenPairID(evidenceID, conditionID)]
+	if !ok {
+		return 0, false
+	}
+	single, ok := tr.occ[evidenceID]
 	if !ok || single == 0 {
 		return 0, false
 	}
 	return float64(double) / float64(single), true
+}
+
+func (tr *tokenRecord) tokenIDOf(tok string) (uint32, bool) {
+	id, ok := tr.tokenID[tok]
+	return id, ok
+}
+
+func (tr *tokenRecord) internToken(tok string) uint32 {
+	if id, ok := tr.tokenID[tok]; ok {
+		return id
+	}
+	id := uint32(len(tr.tokenID) + 1)
+	tr.tokenID[tok] = id
+	return id
 }

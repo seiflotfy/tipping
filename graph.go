@@ -3,7 +3,7 @@ package tipping
 type anchorScratch struct {
 	nodes     []Token
 	nodeIndex map[tokenKey]struct{}
-	occ       []uint32
+	tokenIDs  []uint32
 	occThresh []float64
 	adj       [][]int
 	rev       [][]int
@@ -23,20 +23,24 @@ func newAnchorScratch() *anchorScratch {
 
 func anchorTokens(tokens []Token, idep *tokenRecord, threshold float64, scratch *anchorScratch) map[tokenKey]Token {
 	nodes := scratch.nodes[:0]
+	ids := scratch.tokenIDs[:0]
 	nodeIndex := scratch.nodeIndex
 	clear(nodeIndex)
 	for _, tok := range tokens {
-		if _, ok := idep.occ[tok.Slice]; !ok {
+		id, ok := idep.tokenIDOf(tok.Slice)
+		if !ok {
 			continue
 		}
-		id := tokenKeyFor(tok)
-		if _, ok := nodeIndex[id]; ok {
+		key := tokenKeyFor(tok)
+		if _, ok := nodeIndex[key]; ok {
 			continue
 		}
-		nodeIndex[id] = struct{}{}
+		nodeIndex[key] = struct{}{}
 		nodes = append(nodes, tok)
+		ids = append(ids, id)
 	}
 	scratch.nodes = nodes
+	scratch.tokenIDs = ids
 
 	n := len(nodes)
 	anchors := scratch.anchors
@@ -62,17 +66,6 @@ func anchorTokens(tokens []Token, idep *tokenRecord, threshold float64, scratch 
 	scratch.adj = adj
 	scratch.rev = rev
 
-	occ := scratch.occ
-	if cap(occ) < n {
-		occ = make([]uint32, n)
-	} else {
-		occ = occ[:n]
-	}
-	for i := range occ {
-		occ[i] = idep.occ[nodes[i].Slice]
-	}
-	scratch.occ = occ
-
 	occThresh := scratch.occThresh
 	if cap(occThresh) < n {
 		occThresh = make([]float64, n)
@@ -80,13 +73,13 @@ func anchorTokens(tokens []Token, idep *tokenRecord, threshold float64, scratch 
 		occThresh = occThresh[:n]
 	}
 	for i := range occThresh {
-		occThresh[i] = float64(occ[i]) * threshold
+		occThresh[i] = float64(idep.occ[ids[i]]) * threshold
 	}
 	scratch.occThresh = occThresh
 
 	for i := 0; i < n; i++ {
 		for j := i + 1; j < n; j++ {
-			co, ok := idep.co[newTokenPair(nodes[i].Slice, nodes[j].Slice)]
+			co, ok := idep.co[newTokenPairID(ids[i], ids[j])]
 			if !ok {
 				continue
 			}

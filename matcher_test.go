@@ -87,6 +87,24 @@ func TestMatcherEdgePlaceholders(t *testing.T) {
 	}
 }
 
+func TestMatcherMiddleAnchorsOverlap(t *testing.T) {
+	m := NewMatcher([]string{
+		"<*>abc<*>",
+		"<*>bc<*>",
+	})
+
+	id, args, ok := m.Match("xxabczz")
+	if !ok {
+		t.Fatalf("expected a match")
+	}
+	if id != 0 {
+		t.Fatalf("template id mismatch: got %d want %d", id, 0)
+	}
+	if !reflect.DeepEqual(args, []string{"xx", "zz"}) {
+		t.Fatalf("args mismatch: got %#v want %#v", args, []string{"xx", "zz"})
+	}
+}
+
 func TestMatcherFromTemplateSetsAndNormalize(t *testing.T) {
 	templateSets := [][]string{
 		{"a <*><*> b", "c <*> d"},

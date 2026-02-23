@@ -16,8 +16,8 @@ type Matcher struct {
 	exact       map[string]int
 	prefixIndex map[string][]int
 	suffixIndex map[string][]int
-	middleIndex map[string][]int
-	middleKeys  []string
+	middleAC    *ahoCorasick
+	middleLists [][]int
 	maxPrefix   int
 	maxSuffix   int
 }
@@ -28,6 +28,7 @@ type compiledTemplate struct {
 	parts            []string
 	placeholderCount int
 	literalBytes     int
+	minMsgLen        int
 	firstLiteral     string
 	lastLiteral      string
 }
@@ -72,7 +73,6 @@ func NewMatcher(templates []string) *Matcher {
 	prefixIndex := make(map[string][]int)
 	suffixIndex := make(map[string][]int)
 	middleIndex := make(map[string][]int)
-	middleKeys := make([]string, 0)
 	maxPrefix := 0
 	maxSuffix := 0
 	for _, entry := range entries {
@@ -98,20 +98,26 @@ func NewMatcher(templates []string) *Matcher {
 		if anchor == "" {
 			continue
 		}
-		if _, ok := middleIndex[anchor]; !ok {
-			middleKeys = append(middleKeys, anchor)
-		}
 		middleIndex[anchor] = append(middleIndex[anchor], entry.id)
 	}
 	sortIDsByRank(prefixIndex, rankByID)
 	sortIDsByRank(suffixIndex, rankByID)
 	sortIDsByRank(middleIndex, rankByID)
-	sort.Slice(middleKeys, func(i, j int) bool {
-		if len(middleKeys[i]) != len(middleKeys[j]) {
-			return len(middleKeys[i]) > len(middleKeys[j])
+
+	var middleAC *ahoCorasick
+	var middleLists [][]int
+	if len(middleIndex) > 0 {
+		patterns := make([]string, 0, len(middleIndex))
+		for pattern := range middleIndex {
+			patterns = append(patterns, pattern)
 		}
-		return middleKeys[i] < middleKeys[j]
-	})
+		sort.Strings(patterns)
+		middleLists = make([][]int, len(patterns))
+		for i, pattern := range patterns {
+			middleLists[i] = middleIndex[pattern]
+		}
+		middleAC = newAhoCorasick(patterns)
+	}
 
 	return &Matcher{
 		templates:   kept,
@@ -120,8 +126,8 @@ func NewMatcher(templates []string) *Matcher {
 		exact:       exact,
 		prefixIndex: prefixIndex,
 		suffixIndex: suffixIndex,
-		middleIndex: middleIndex,
-		middleKeys:  middleKeys,
+		middleAC:    middleAC,
+		middleLists: middleLists,
 		maxPrefix:   maxPrefix,
 		maxSuffix:   maxSuffix,
 	}
@@ -213,16 +219,24 @@ func (m *Matcher) bestMatchID(msg string) (int, bool) {
 
 	bestID := -1
 	bestRank := len(m.byID) + 1
-	evaluate := func(id int) {
-		rank := m.rankByID[id]
-		if rank >= bestRank {
-			return
+	msgLen := len(msg)
+	evaluateList := func(candidates []int) {
+		for _, id := range candidates {
+			rank := m.rankByID[id]
+			if rank >= bestRank {
+				// Candidate lists are rank-sorted; later entries cannot beat current best.
+				break
+			}
+			entry := m.byID[id]
+			if msgLen < entry.minMsgLen {
+				continue
+			}
+			if !entry.matches(msg) {
+				continue
+			}
+			bestID = id
+			bestRank = rank
 		}
-		if !m.byID[id].matches(msg) {
-			return
-		}
-		bestID = id
-		bestRank = rank
 	}
 
 	if m.maxPrefix > 0 && len(msg) > 0 {
@@ -235,9 +249,7 @@ func (m *Matcher) bestMatchID(msg string) (int, bool) {
 			if !ok {
 				continue
 			}
-			for _, id := range candidates {
-				evaluate(id)
-			}
+			evaluateList(candidates)
 		}
 	}
 
@@ -252,20 +264,15 @@ func (m *Matcher) bestMatchID(msg string) (int, bool) {
 			if !ok {
 				continue
 			}
-			for _, id := range candidates {
-				evaluate(id)
-			}
+			evaluateList(candidates)
 		}
 	}
 
-	for _, anchor := range m.middleKeys {
-		if !strings.Contains(msg, anchor) {
-			continue
-		}
-		candidates := m.middleIndex[anchor]
-		for _, id := range candidates {
-			evaluate(id)
-		}
+	if m.middleAC != nil && len(msg) > 0 {
+		m.middleAC.Search(msg, func(patternID int) bool {
+			evaluateList(m.middleLists[patternID])
+			return bestRank > 0
+		})
 	}
 
 	if bestID >= 0 {
@@ -286,6 +293,7 @@ func compileTemplate(id int, tmpl string) compiledTemplate {
 		parts:            parts,
 		placeholderCount: len(parts) - 1,
 		literalBytes:     literalBytes,
+		minMsgLen:        literalBytes + len(parts) - 1,
 		firstLiteral:     parts[0],
 		lastLiteral:      parts[len(parts)-1],
 	}

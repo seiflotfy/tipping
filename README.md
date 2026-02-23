@@ -123,6 +123,24 @@ ids := matcher.MatchAllIDs(msgs)
 _ = ids
 ```
 
+### Corpus codec (exact lookup)
+
+If you compress messages from the same corpus used at training time, build an
+exact codec once and use O(1) message lookup:
+
+```go
+codec, err := tipping.NewCorpusCodec(msgs, nil) // nil => tipping.NewParser()
+if err != nil {
+	panic(err)
+}
+
+templateID, args, ok := codec.Encode(msgs[0])
+if ok {
+	decoded, _ := codec.Decode(templateID, args)
+	_ = decoded // equals msgs[0]
+}
+```
+
 See all options:
 
 ```bash

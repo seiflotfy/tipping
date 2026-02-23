@@ -68,11 +68,17 @@ func templatesForCluster(tokenized [][]Token, common map[string]struct{}) []stri
 	set := make(map[string]struct{}, len(tokenized))
 	for _, toks := range tokenized {
 		template := make([]byte, 0, tokenLength(toks)+8)
+		lastPlaceholder := false
 		for _, tok := range toks {
 			if _, ok := common[tok.Slice]; ok {
 				template = append(template, tok.Slice...)
+				lastPlaceholder = false
 			} else {
+				if lastPlaceholder {
+					continue
+				}
 				template = append(template, "<*>"...)
+				lastPlaceholder = true
 			}
 		}
 		set[string(template)] = struct{}{}
@@ -90,36 +96,12 @@ func parameterMasks(tokenized [][]Token, common map[string]struct{}) []string {
 	masks := make([]string, len(tokenized))
 	for i, toks := range tokenized {
 		mask := make([]byte, 0, tokenLength(toks))
-		shouldParameterize := false
-		for idx, tok := range toks {
-			switch tok.Kind {
-			case TokenSymbolic:
-				if _, ok := common[tok.Slice]; ok {
-					if isBoundaryToken(toks, idx+1) {
-						mask = append(mask, '0')
-					} else if shouldParameterize {
-						mask = append(mask, '1')
-					} else {
-						mask = append(mask, '0')
-					}
-				} else {
-					mask = append(mask, '1')
-				}
-			case TokenWhitespace:
-				mask = append(mask, '0')
-				shouldParameterize = false
-			case TokenSpecialWhite:
+		for _, tok := range toks {
+			if _, ok := common[tok.Slice]; ok {
 				appendRepeat(&mask, '0', len(tok.Slice))
-			case TokenSpecialBlack:
-				appendRepeat(&mask, '1', len(tok.Slice))
-			default:
-				if _, ok := common[tok.Slice]; !ok || shouldParameterize {
-					appendRepeat(&mask, '1', len(tok.Slice))
-					shouldParameterize = true
-				} else {
-					appendRepeat(&mask, '0', len(tok.Slice))
-				}
+				continue
 			}
+			appendRepeat(&mask, '1', len(tok.Slice))
 		}
 		masks[i] = string(mask)
 	}
@@ -132,14 +114,6 @@ func tokenLength(tokens []Token) int {
 		n += len(tok.Slice)
 	}
 	return n
-}
-
-func isBoundaryToken(tokens []Token, idx int) bool {
-	if idx >= len(tokens) {
-		return true
-	}
-	kind := tokens[idx].Kind
-	return kind == TokenWhitespace || kind == TokenSymbolic
 }
 
 func appendRepeat(buf *[]byte, b byte, n int) {

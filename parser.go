@@ -10,12 +10,16 @@ import (
 
 const allPunctuationSymbols = "!\"#$%&'()*+,-./:;<=>?@[\\]^_`{|}~"
 const defaultThreshold = 0.5
+const defaultPatternSample = 1.0
+const DefaultSymbols = "()[]{}=,*"
 
 var allPunctuationSymbolSet = newSymbolSet(allPunctuationSymbols)
+var defaultSymbolSet = newSymbolSet(DefaultSymbols)
 
 // Parser is a Go implementation of Token Interdependency Parsing.
 type Parser struct {
 	threshold        float64
+	patternSample    float64
 	specialWhites    []*regexp.Regexp
 	specialBlacks    []*regexp.Regexp
 	symbols          map[rune]struct{}
@@ -46,9 +50,10 @@ func NewParseBuffers() *ParseBuffers {
 func NewParser() *Parser {
 	return &Parser{
 		threshold:        defaultThreshold,
+		patternSample:    defaultPatternSample,
 		specialWhites:    nil,
 		specialBlacks:    nil,
-		symbols:          map[rune]struct{}{},
+		symbols:          cloneSymbolSet(defaultSymbolSet),
 		filterAlphabetic: true,
 		filterNumeric:    false,
 		filterImpure:     false,
@@ -64,6 +69,15 @@ func (p *Parser) SetThreshold(value float64) error {
 	return nil
 }
 
+// SetPatternSample validates and sets the fraction of messages used for pattern creation in (0,1].
+func (p *Parser) SetPatternSample(value float64) error {
+	if err := validatePatternSample(value); err != nil {
+		return err
+	}
+	p.patternSample = value
+	return nil
+}
+
 // WithSpecialWhites sets regexes that are never parameterized.
 func (p *Parser) WithSpecialWhites(value []*regexp.Regexp) *Parser {
 	p.specialWhites = append([]*regexp.Regexp(nil), value...)
@@ -76,7 +90,7 @@ func (p *Parser) WithSpecialBlacks(value []*regexp.Regexp) *Parser {
 	return p
 }
 
-// WithSymbols sets extra split symbols used in primary tokenization.
+// WithSymbols sets split symbols used in primary tokenization.
 func (p *Parser) WithSymbols(symbols string) *Parser {
 	p.symbols = newSymbolSet(symbols)
 	return p
@@ -250,9 +264,10 @@ func (p *Parser) parse(messages []string, wantTemplates, wantMasks bool, buffers
 			for i, idx := range group.indices {
 				clusterTokens[i] = richTokenized[idx]
 			}
-			shared := sharedSlices(clusterTokens, filter)
+			patternTokens := sampleTokenRows(clusterTokens, p.patternSample)
+			shared := sharedSlices(patternTokens, filter)
 			if wantTemplates {
-				templates = append(templates, templatesForCluster(clusterTokens, shared))
+				templates = append(templates, templatesForCluster(patternTokens, shared))
 			}
 			if wantMasks {
 				clusterMasks := parameterMasks(clusterTokens, shared)
@@ -273,6 +288,40 @@ func (p *Parser) parse(messages []string, wantTemplates, wantMasks bool, buffers
 		buffers.Masks = masks
 	}
 	return clusters, templates, masks
+}
+
+func sampleTokenRows(tokenized [][]Token, sample float64) [][]Token {
+	n := len(tokenized)
+	if n <= 1 || sample >= 1 {
+		return tokenized
+	}
+
+	sampleN := int(math.Ceil(float64(n) * sample))
+	if sampleN < 1 {
+		sampleN = 1
+	}
+	if sampleN >= n {
+		return tokenized
+	}
+	if sampleN == 1 {
+		return tokenized[:1]
+	}
+
+	out := make([][]Token, sampleN)
+	step := float64(n-1) / float64(sampleN-1)
+	prev := -1
+	for i := 0; i < sampleN; i++ {
+		idx := int(math.Round(float64(i) * step))
+		if idx <= prev {
+			idx = prev + 1
+		}
+		if idx >= n {
+			idx = n - 1
+		}
+		out[i] = tokenized[idx]
+		prev = idx
+	}
+	return out
 }
 
 type anchorGroup struct {
@@ -393,8 +442,18 @@ func retokenizeTokensWithSymbolsInto(tokens []Token, symbols map[rune]struct{}, 
 	}
 
 	out := dst[:0]
-	if cap(out) < len(tokens)*2 {
-		out = make([]Token, 0, len(tokens)*2)
+	needed := len(tokens)
+	for _, tok := range tokens[start:] {
+		if tok.Kind != TokenImpure {
+			continue
+		}
+		splitCount := splitTokenCount(tok.Slice, symbols)
+		if splitCount > 1 {
+			needed += splitCount - 1
+		}
+	}
+	if cap(out) < needed {
+		out = make([]Token, 0, needed)
 	}
 	out = append(out, tokens[:start]...)
 	for _, tok := range tokens[start:] {
@@ -526,6 +585,13 @@ func (l tokenKeyList) Less(i, j int) bool {
 func validateThreshold(value float64) error {
 	if math.IsNaN(value) || math.IsInf(value, 0) || value < 0 || value > 1 {
 		return fmt.Errorf("threshold must be in [0,1], got %v", value)
+	}
+	return nil
+}
+
+func validatePatternSample(value float64) error {
+	if math.IsNaN(value) || math.IsInf(value, 0) || value <= 0 || value > 1 {
+		return fmt.Errorf("pattern sample must be in (0,1], got %v", value)
 	}
 	return nil
 }

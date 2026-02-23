@@ -1,6 +1,7 @@
 package tipping
 
 import (
+	"math"
 	"reflect"
 	"testing"
 )
@@ -139,5 +140,75 @@ func TestParseIntoParity(t *testing.T) {
 	}
 	if !reflect.DeepEqual(gotMasks, wantMasks) {
 		t.Fatalf("short masks mismatch\n got: %#v\nwant: %#v", gotMasks, wantMasks)
+	}
+}
+
+func TestPatternSampleValidation(t *testing.T) {
+	parser := NewParser()
+	for _, value := range []float64{0, -0.1, 1.1, math.NaN(), math.Inf(1)} {
+		if err := parser.SetPatternSample(value); err == nil {
+			t.Fatalf("expected invalid pattern sample error for %v", value)
+		}
+	}
+	for _, value := range []float64{1, 0.5, 0.01} {
+		if err := parser.SetPatternSample(value); err != nil {
+			t.Fatalf("unexpected error for valid pattern sample %v: %v", value, err)
+		}
+	}
+}
+
+func TestPatternSampleOneParity(t *testing.T) {
+	msgs := []string{
+		"a x1 x2 b",
+		"a x2 b",
+		"a x3 b",
+		"a x4 b",
+		"c x1 d",
+		"c x2 d",
+	}
+
+	base := NewParser()
+	wantClusters, wantTemplates, wantMasks := base.ParseWithTemplatesAndMasks(msgs)
+
+	sampled := NewParser()
+	if err := sampled.SetPatternSample(1.0); err != nil {
+		t.Fatalf("set pattern sample: %v", err)
+	}
+	gotClusters, gotTemplates, gotMasks := sampled.ParseWithTemplatesAndMasks(msgs)
+
+	if !reflect.DeepEqual(gotClusters, wantClusters) {
+		t.Fatalf("clusters mismatch\n got: %#v\nwant: %#v", gotClusters, wantClusters)
+	}
+	if !reflect.DeepEqual(gotTemplates, wantTemplates) {
+		t.Fatalf("templates mismatch\n got: %#v\nwant: %#v", gotTemplates, wantTemplates)
+	}
+	if !reflect.DeepEqual(gotMasks, wantMasks) {
+		t.Fatalf("masks mismatch\n got: %#v\nwant: %#v", gotMasks, wantMasks)
+	}
+}
+
+func TestPatternSampleAffectsPatternsNotClusters(t *testing.T) {
+	msgs := []string{
+		"a x1 x2 b",
+		"a x2 b",
+		"a x3 b",
+		"a x4 b",
+		"c x1 d",
+		"c x2 d",
+		"c x3 d",
+		"c x4 d",
+	}
+
+	base := NewParser()
+	wantClusters, _, _ := base.ParseWithTemplatesAndMasks(msgs)
+
+	sampled := NewParser()
+	if err := sampled.SetPatternSample(0.25); err != nil {
+		t.Fatalf("set pattern sample: %v", err)
+	}
+	gotClusters, _, _ := sampled.ParseWithTemplatesAndMasks(msgs)
+
+	if !reflect.DeepEqual(gotClusters, wantClusters) {
+		t.Fatalf("clusters mismatch\n got: %#v\nwant: %#v", gotClusters, wantClusters)
 	}
 }

@@ -73,14 +73,14 @@ func anchorTokens(tokens []Token, idep *tokenRecord, threshold float64, scratch 
 		occThresh = occThresh[:n]
 	}
 	for i := range occThresh {
-		occThresh[i] = float64(idep.occ[ids[i]]) * threshold
+		occThresh[i] = float64(idep.occ[int(ids[i])]) * threshold
 	}
 	scratch.occThresh = occThresh
 
 	for i := 0; i < n; i++ {
 		for j := i + 1; j < n; j++ {
-			co, ok := idep.co[newTokenPairID(ids[i], ids[j])]
-			if !ok {
+			co := idep.co[newTokenPairID(ids[i], ids[j])]
+			if co == 0 {
 				continue
 			}
 			cof := float64(co)

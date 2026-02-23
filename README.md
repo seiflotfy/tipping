@@ -69,6 +69,16 @@ go run ./cmd/tipping -input logs.txt -output result.json -templates
 
 If you also want masks, add `-masks`.
 
+For fastest execution, omit `-templates` and `-masks` to return clusters only.
+
+To build patterns from a sample instead of all messages, use:
+
+```bash
+go run ./cmd/tipping -pattern-sample 0.25 -templates
+```
+
+`-pattern-sample` must be in `(0,1]` and defaults to `1.0`.
+
 ## Matching semantics
 
 `ParseWithTemplates` returns:
@@ -87,6 +97,31 @@ when `clusters[i] >= 0`.
 - `masks []string`: parameter mask aligned by input index (`masks[i]` belongs to `msgs[i]`).
 
 Masks are index-aligned, so duplicate input lines remain duplicated in output.
+
+### Runtime matching
+
+You can build a matcher from parser templates and resolve new messages to a
+single template id + extracted arguments:
+
+```go
+clusters, templates := tipping.NewParser().ParseWithTemplates(msgs)
+_ = clusters
+
+matcher := tipping.NewMatcherFromTemplateSets(templates)
+templateID, args, ok := matcher.Match("a x9 b")
+if ok {
+	fmt.Println(templateID, args)
+}
+
+// Faster paths when args are not needed:
+templateID, ok = matcher.MatchID("a x9 b")
+_ = templateID
+_ = ok
+
+// Batch id matching with duplicate-line reuse:
+ids := matcher.MatchAllIDs(msgs)
+_ = ids
+```
 
 See all options:
 

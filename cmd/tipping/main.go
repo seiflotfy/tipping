@@ -55,7 +55,8 @@ func run(args []string, stdin io.Reader, stdout, stderr io.Writer) error {
 	inputPath := fs.String("input", "-", "input file path ('-' for stdin)")
 	outputPath := fs.String("output", "-", "output file path ('-' for stdout)")
 	threshold := fs.Float64("threshold", 0.5, "dependency threshold in [0,1]")
-	symbols := fs.String("symbols", "", "additional split symbols")
+	patternSample := fs.Float64("pattern-sample", 1.0, "fraction of messages used for pattern creation in (0,1]")
+	symbols := fs.String("symbols", tipping.DefaultSymbols, "split symbols")
 	filterAlphabetic := fs.Bool("filter-alphabetic", true, "include alphabetic tokens in dependency scoring")
 	filterNumeric := fs.Bool("filter-numeric", false, "include numeric tokens in dependency scoring")
 	filterImpure := fs.Bool("filter-impure", false, "include impure tokens in dependency scoring")
@@ -93,6 +94,9 @@ func run(args []string, stdin io.Reader, stdout, stderr io.Writer) error {
 		WithFilterNumeric(*filterNumeric).
 		WithFilterImpure(*filterImpure)
 	if err := p.SetThreshold(*threshold); err != nil {
+		return err
+	}
+	if err := p.SetPatternSample(*patternSample); err != nil {
 		return err
 	}
 

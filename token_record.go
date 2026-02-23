@@ -1,20 +1,17 @@
 package tipping
 
-type tokenPairID struct {
-	a uint32
-	b uint32
-}
+type tokenPairID uint64
 
 func newTokenPairID(t1, t2 uint32) tokenPairID {
-	if t1 > t2 {
-		return tokenPairID{a: t1, b: t2}
+	if t1 < t2 {
+		t1, t2 = t2, t1
 	}
-	return tokenPairID{a: t2, b: t1}
+	return tokenPairID(uint64(t1)<<32 | uint64(t2))
 }
 
 type tokenRecord struct {
 	tokenID map[string]uint32
-	occ     map[uint32]uint32
+	occ     []uint32
 	co      map[tokenPairID]uint32
 }
 
@@ -28,7 +25,7 @@ type tokenSliceScratch struct {
 func newTokenRecord(tokenized [][]Token, filter staticFilter) *tokenRecord {
 	record := &tokenRecord{
 		tokenID: map[string]uint32{},
-		occ:     map[uint32]uint32{},
+		occ:     make([]uint32, 1),
 		co:      map[tokenPairID]uint32{},
 	}
 	if len(tokenized) == 0 {
@@ -94,8 +91,10 @@ func (tr *tokenRecord) occurrence(tok string) (uint32, bool) {
 	if !ok {
 		return 0, false
 	}
-	count, ok := tr.occ[id]
-	return count, ok
+	if int(id) >= len(tr.occ) {
+		return 0, false
+	}
+	return tr.occ[id], true
 }
 
 func (tr *tokenRecord) dependency(evidence, condition string) (float64, bool) {
@@ -111,8 +110,11 @@ func (tr *tokenRecord) dependency(evidence, condition string) (float64, bool) {
 	if !ok {
 		return 0, false
 	}
-	single, ok := tr.occ[evidenceID]
-	if !ok || single == 0 {
+	if int(evidenceID) >= len(tr.occ) {
+		return 0, false
+	}
+	single := tr.occ[evidenceID]
+	if single == 0 {
 		return 0, false
 	}
 	return float64(double) / float64(single), true
@@ -129,5 +131,6 @@ func (tr *tokenRecord) internToken(tok string) uint32 {
 	}
 	id := uint32(len(tr.tokenID) + 1)
 	tr.tokenID[tok] = id
+	tr.occ = append(tr.occ, 0)
 	return id
 }

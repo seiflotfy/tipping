@@ -46,3 +46,13 @@ func TestRunInvalidThreshold(t *testing.T) {
 		t.Fatalf("expected invalid threshold error")
 	}
 }
+
+func TestRunInvalidPatternSample(t *testing.T) {
+	var out bytes.Buffer
+	var errOut bytes.Buffer
+
+	err := run([]string{"-pattern-sample", "0"}, strings.NewReader("x\n"), &out, &errOut)
+	if err == nil {
+		t.Fatalf("expected invalid pattern sample error")
+	}
+}

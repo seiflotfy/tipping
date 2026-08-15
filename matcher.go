@@ -18,8 +18,8 @@ type Matcher struct {
 	suffixIndex map[string][]int
 	middleAC    *ahoCorasick
 	middleLists [][]int
-	maxPrefix   int
-	maxSuffix   int
+	prefixLens  []int // distinct first-literal lengths, ascending
+	suffixLens  []int // distinct last-literal lengths, ascending
 }
 
 type compiledTemplate struct {
@@ -73,8 +73,6 @@ func NewMatcher(templates []string) *Matcher {
 	prefixIndex := make(map[string][]int)
 	suffixIndex := make(map[string][]int)
 	middleIndex := make(map[string][]int)
-	maxPrefix := 0
-	maxSuffix := 0
 	for _, entry := range entries {
 		if entry.placeholderCount == 0 {
 			exact[entry.template] = entry.id
@@ -82,16 +80,10 @@ func NewMatcher(templates []string) *Matcher {
 		}
 		if entry.firstLiteral != "" {
 			prefixIndex[entry.firstLiteral] = append(prefixIndex[entry.firstLiteral], entry.id)
-			if len(entry.firstLiteral) > maxPrefix {
-				maxPrefix = len(entry.firstLiteral)
-			}
 			continue
 		}
 		if entry.lastLiteral != "" {
 			suffixIndex[entry.lastLiteral] = append(suffixIndex[entry.lastLiteral], entry.id)
-			if len(entry.lastLiteral) > maxSuffix {
-				maxSuffix = len(entry.lastLiteral)
-			}
 			continue
 		}
 		anchor := strongestMiddleLiteral(entry.parts)
@@ -128,9 +120,23 @@ func NewMatcher(templates []string) *Matcher {
 		suffixIndex: suffixIndex,
 		middleAC:    middleAC,
 		middleLists: middleLists,
-		maxPrefix:   maxPrefix,
-		maxSuffix:   maxSuffix,
+		prefixLens:  distinctKeyLens(prefixIndex),
+		suffixLens:  distinctKeyLens(suffixIndex),
 	}
+}
+
+func distinctKeyLens(index map[string][]int) []int {
+	seen := make(map[int]struct{}, len(index))
+	lens := make([]int, 0, len(index))
+	for key := range index {
+		if _, ok := seen[len(key)]; ok {
+			continue
+		}
+		seen[len(key)] = struct{}{}
+		lens = append(lens, len(key))
+	}
+	sort.Ints(lens)
+	return lens
 }
 
 // NewMatcherFromTemplateSets flattens parser template sets and builds a matcher.
@@ -239,33 +245,26 @@ func (m *Matcher) bestMatchID(msg string) (int, bool) {
 		}
 	}
 
-	if m.maxPrefix > 0 && len(msg) > 0 {
-		limit := m.maxPrefix
-		if len(msg) < limit {
-			limit = len(msg)
+	for _, n := range m.prefixLens {
+		if n > msgLen {
+			break
 		}
-		for n := 1; n <= limit; n++ {
-			candidates, ok := m.prefixIndex[msg[:n]]
-			if !ok {
-				continue
-			}
-			evaluateList(candidates)
+		candidates, ok := m.prefixIndex[msg[:n]]
+		if !ok {
+			continue
 		}
+		evaluateList(candidates)
 	}
 
-	if m.maxSuffix > 0 && len(msg) > 0 {
-		limit := m.maxSuffix
-		if len(msg) < limit {
-			limit = len(msg)
+	for _, n := range m.suffixLens {
+		if n > msgLen {
+			break
 		}
-		for n := 1; n <= limit; n++ {
-			start := len(msg) - n
-			candidates, ok := m.suffixIndex[msg[start:]]
-			if !ok {
-				continue
-			}
-			evaluateList(candidates)
+		candidates, ok := m.suffixIndex[msg[msgLen-n:]]
+		if !ok {
+			continue
 		}
+		evaluateList(candidates)
 	}
 
 	if m.middleAC != nil && len(msg) > 0 {

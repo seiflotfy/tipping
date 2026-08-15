@@ -1,6 +1,7 @@
 package tipping
 
 import (
+	"fmt"
 	"os"
 	"path/filepath"
 	"regexp"
@@ -20,7 +21,49 @@ var (
 	benchSpecialCorpus = mustLoadCorpus("special.log")
 	benchDefault4K     = expandToAtLeast(benchDefaultCorpus, 4096)
 	benchSpecial4K     = expandToAtLeast(benchSpecialCorpus, 4096)
+	benchUnique4K      = makeUniqueCorpus(4096)
 )
+
+// makeUniqueCorpus generates n distinct lines across 4 shapes: the worst case
+// for line deduplication (every line unique).
+func makeUniqueCorpus(n int) []string {
+	out := make([]string, 0, n)
+	for i := 0; i < n; i++ {
+		switch i % 4 {
+		case 0:
+			out = append(out, fmt.Sprintf("Accepted password for user%d from 10.0.%d.%d port %d ssh2", i, i%256, i%199, 40000+i))
+		case 1:
+			out = append(out, fmt.Sprintf("Connection closed by 192.168.%d.%d [preauth]", i%256, i%97))
+		case 2:
+			out = append(out, fmt.Sprintf("block blk_%d received exception java.io.IOException", 100000+i))
+		default:
+			out = append(out, fmt.Sprintf("PacketResponder %d for block blk_%d terminating", i%3, 200000+i))
+		}
+	}
+	return out
+}
+
+func BenchmarkParseUnique4KReuseBuffers(b *testing.B) {
+	p := NewParser()
+	p.WithFilterAlphabetic(true)
+	bufs := NewParseBuffers()
+	b.ReportAllocs()
+	b.ResetTimer()
+	for i := 0; i < b.N; i++ {
+		benchClusters = p.ParseInto(benchUnique4K, bufs)
+	}
+}
+
+func BenchmarkParseWithTemplatesAndMasksUnique4KReuseBuffers(b *testing.B) {
+	p := NewParser()
+	p.WithFilterAlphabetic(true)
+	bufs := NewParseBuffers()
+	b.ReportAllocs()
+	b.ResetTimer()
+	for i := 0; i < b.N; i++ {
+		benchClusters, benchTemplates, benchMasks = p.ParseWithTemplatesAndMasksInto(benchUnique4K, bufs)
+	}
+}
 
 func BenchmarkParseDefault4K(b *testing.B) {
 	p := NewParser()
@@ -114,6 +157,16 @@ func BenchmarkParseWithTemplatesAndMasksSpecial4KReuseBuffers(b *testing.B) {
 func BenchmarkTokenizerDefaultLine(b *testing.B) {
 	tok := NewTokenizer(nil, nil, map[rune]struct{}{})
 	msg := "a x1 x2 b"
+	b.ReportAllocs()
+	b.ResetTimer()
+	for i := 0; i < b.N; i++ {
+		benchTokens = tok.Tokenize(msg)
+	}
+}
+
+func BenchmarkTokenizerRealisticLine(b *testing.B) {
+	tok := NewTokenizer(nil, nil, newSymbolSet(DefaultSymbols))
+	msg := "2024-03-01T12:34:56.789Z INFO sshd[24206]: Accepted password for user42 from 10.0.3.117 port 40122 ssh2 (session=af31bc)"
 	b.ReportAllocs()
 	b.ResetTimer()
 	for i := 0; i < b.N; i++ {

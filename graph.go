@@ -1,8 +1,14 @@
 package tipping
 
+type dfsFrame struct {
+	v, i int
+}
+
 type anchorScratch struct {
 	nodes     []Token
-	nodeIndex map[tokenKey]struct{}
+	nodeEpoch []uint32 // per token id: last epoch the id produced a node
+	nodeKinds []uint8  // per token id: kind bits seen in that epoch
+	epoch     uint32
 	tokenIDs  []uint32
 	occThresh []float64
 	adj       [][]int
@@ -11,31 +17,38 @@ type anchorScratch struct {
 	visited   []bool
 	comp      []int
 	largest   []int
+	frames    []dfsFrame
+	stack     []int
 	anchors   map[tokenKey]Token
 }
 
-func newAnchorScratch() *anchorScratch {
+func newAnchorScratch(numIDs int) *anchorScratch {
 	return &anchorScratch{
-		nodeIndex: make(map[tokenKey]struct{}),
+		nodeEpoch: make([]uint32, numIDs),
+		nodeKinds: make([]uint8, numIDs),
 		anchors:   make(map[tokenKey]Token),
 	}
 }
 
-func anchorTokens(tokens []Token, idep *tokenRecord, threshold float64, scratch *anchorScratch) map[tokenKey]Token {
+func anchorTokens(tokens []Token, tokenIDs []uint32, idep *tokenRecord, threshold float64, scratch *anchorScratch) map[tokenKey]Token {
 	nodes := scratch.nodes[:0]
 	ids := scratch.tokenIDs[:0]
-	nodeIndex := scratch.nodeIndex
-	clear(nodeIndex)
-	for _, tok := range tokens {
-		id, ok := idep.tokenIDOf(tok.Slice)
-		if !ok {
+	scratch.epoch++
+	epoch := scratch.epoch
+	for j, tok := range tokens {
+		id := tokenIDs[j]
+		if idep.occ[id] == 0 {
 			continue
 		}
-		key := tokenKeyFor(tok)
-		if _, ok := nodeIndex[key]; ok {
+		if scratch.nodeEpoch[id] != epoch {
+			scratch.nodeEpoch[id] = epoch
+			scratch.nodeKinds[id] = 0
+		}
+		bit := uint8(1) << tok.Kind
+		if scratch.nodeKinds[id]&bit != 0 {
 			continue
 		}
-		nodeIndex[key] = struct{}{}
+		scratch.nodeKinds[id] |= bit
 		nodes = append(nodes, tok)
 		ids = append(ids, id)
 	}
@@ -95,50 +108,66 @@ func anchorTokens(tokens []Token, idep *tokenRecord, threshold float64, scratch 
 		}
 	}
 
+	// Kosaraju pass 1: postorder over adj, iterative to avoid closure and
+	// stack-growth allocations on this per-row hot path.
 	order := scratch.order[:0]
 	visited := ensureBoolBuffer(scratch.visited, n)
 	clear(visited)
-	var dfs1 func(int)
-	dfs1 = func(v int) {
-		visited[v] = true
-		for _, to := range adj[v] {
-			if !visited[to] {
-				dfs1(to)
-			}
+	frames := scratch.frames[:0]
+	for v0 := 0; v0 < n; v0++ {
+		if visited[v0] {
+			continue
 		}
-		order = append(order, v)
-	}
-	for v := 0; v < n; v++ {
-		if !visited[v] {
-			dfs1(v)
+		visited[v0] = true
+		frames = append(frames, dfsFrame{v: v0})
+		for len(frames) > 0 {
+			f := &frames[len(frames)-1]
+			if f.i < len(adj[f.v]) {
+				to := adj[f.v][f.i]
+				f.i++
+				if !visited[to] {
+					visited[to] = true
+					frames = append(frames, dfsFrame{v: to})
+				}
+				continue
+			}
+			order = append(order, f.v)
+			frames = frames[:len(frames)-1]
 		}
 	}
 	scratch.order = order
+	scratch.frames = frames
 
+	// Kosaraju pass 2: collect components over rev; only component sizes and
+	// membership matter, so visit order within a component is irrelevant.
 	clear(visited)
 	largest := scratch.largest[:0]
-	var dfs2 func(int, *[]int)
-	dfs2 = func(v int, comp *[]int) {
-		visited[v] = true
-		*comp = append(*comp, v)
-		for _, to := range rev[v] {
-			if !visited[to] {
-				dfs2(to, comp)
-			}
-		}
-	}
+	stack := scratch.stack
 	for i := len(order) - 1; i >= 0; i-- {
 		v := order[i]
 		if visited[v] {
 			continue
 		}
 		comp := scratch.comp[:0]
-		dfs2(v, &comp)
+		visited[v] = true
+		stack = append(stack[:0], v)
+		for len(stack) > 0 {
+			x := stack[len(stack)-1]
+			stack = stack[:len(stack)-1]
+			comp = append(comp, x)
+			for _, to := range rev[x] {
+				if !visited[to] {
+					visited[to] = true
+					stack = append(stack, to)
+				}
+			}
+		}
 		scratch.comp = comp
 		if len(comp) > len(largest) {
 			largest = append(largest[:0], comp...)
 		}
 	}
+	scratch.stack = stack
 	scratch.largest = largest
 	scratch.visited = visited
 

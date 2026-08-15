@@ -1,6 +1,7 @@
 package tipping
 
 import (
+	"fmt"
 	"math"
 	"reflect"
 	"testing"
@@ -210,5 +211,34 @@ func TestPatternSampleAffectsPatternsNotClusters(t *testing.T) {
 
 	if !reflect.DeepEqual(gotClusters, wantClusters) {
 		t.Fatalf("clusters mismatch\n got: %#v\nwant: %#v", gotClusters, wantClusters)
+	}
+}
+
+func TestParallelParseMatchesSerial(t *testing.T) {
+	msgs := make([]string, 0, 3000)
+	for i := 0; i < 3000; i++ {
+		switch i % 3 {
+		case 0:
+			msgs = append(msgs, fmt.Sprintf("Accepted password for user%d from 10.0.%d.%d port %d ssh2", i, i%256, i%199, 40000+i))
+		case 1:
+			msgs = append(msgs, fmt.Sprintf("Connection closed by 192.168.%d.%d [preauth]", i%256, i%97))
+		default:
+			msgs = append(msgs, fmt.Sprintf("block blk_%d received exception java.io.IOException", 100000+i%700))
+		}
+	}
+
+	serial := NewParser().WithParallelism(1)
+	parallel := NewParser().WithParallelism(8)
+	sc, st, sm := serial.ParseWithTemplatesAndMasks(msgs)
+	pc, pt, pm := parallel.ParseWithTemplatesAndMasks(msgs)
+
+	if !reflect.DeepEqual(sc, pc) {
+		t.Fatal("clusters differ between serial and parallel parse")
+	}
+	if !reflect.DeepEqual(st, pt) {
+		t.Fatal("templates differ between serial and parallel parse")
+	}
+	if !reflect.DeepEqual(sm, pm) {
+		t.Fatal("masks differ between serial and parallel parse")
 	}
 }

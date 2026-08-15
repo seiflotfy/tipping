@@ -2,51 +2,83 @@ package tipping
 
 import "sort"
 
-func sharedSlices(tokenized [][]Token, filter staticFilter) map[string]struct{} {
-	if len(tokenized) == 0 {
-		return map[string]struct{}{}
-	}
+// commonSet answers "is this token id common to every sampled row of the
+// cluster" with one array read. mark is shared across clusters and cleared by
+// epoch advancement, never by rewriting.
+type commonSet struct {
+	mark  []uint32
+	final uint32
+}
 
-	shared := make(map[string]struct{}, len(tokenized[0]))
-	for _, tok := range tokenized[0] {
-		if commonCandidate(tok, filter) {
-			shared[tok.Slice] = struct{}{}
+func (c *commonSet) contains(id uint32) bool {
+	return c.mark[id] == c.final
+}
+
+type commonScratch struct {
+	mark []uint32
+	base uint32
+}
+
+// sharedSlices intersects the candidate tokens across all rows. tokenIDs is
+// index-aligned with tokenized. The returned set is only valid until the next
+// call with the same scratch.
+func sharedSlices(tokenized [][]Token, tokenIDs [][]uint32, filter staticFilter, scratch *commonScratch, numIDs int) commonSet {
+	if cap(scratch.mark) < numIDs {
+		scratch.mark = make([]uint32, numIDs)
+		scratch.base = 0
+	} else {
+		scratch.mark = scratch.mark[:numIDs]
+	}
+	out := commonSet{mark: scratch.mark}
+	if len(tokenized) == 0 {
+		return out
+	}
+	if scratch.base > ^uint32(0)-uint32(len(tokenized))-1 {
+		clear(scratch.mark)
+		scratch.base = 0
+	}
+	base := scratch.base
+
+	count := 0
+	for j, tok := range tokenized[0] {
+		if !commonCandidate(tok, filter) {
+			continue
+		}
+		id := tokenIDs[0][j]
+		if scratch.mark[id] != base+1 {
+			scratch.mark[id] = base + 1
+			count++
 		}
 	}
-	if len(tokenized) == 1 || len(shared) == 0 {
-		return shared
-	}
 
-	seenEpoch := make(map[string]uint32, len(shared))
-	epoch := uint32(1)
+	final := base + 1
 	for i := 1; i < len(tokenized); i++ {
-		toks := tokenized[i]
-
-		for _, tok := range toks {
+		if count == 0 {
+			break
+		}
+		epoch := base + uint32(i)
+		hits := 0
+		for j, tok := range tokenized[i] {
 			if !commonCandidate(tok, filter) {
 				continue
 			}
-			if _, ok := shared[tok.Slice]; ok {
-				seenEpoch[tok.Slice] = epoch
+			id := tokenIDs[i][j]
+			if scratch.mark[id] == epoch {
+				scratch.mark[id] = epoch + 1
+				hits++
 			}
 		}
-
-		for slice := range shared {
-			if seenEpoch[slice] != epoch {
-				delete(shared, slice)
-			}
-		}
-		if len(shared) == 0 {
-			break
-		}
-		epoch++
-		if epoch == 0 {
-			clear(seenEpoch)
-			epoch = 1
-		}
+		count = hits
+		final = epoch + 1
 	}
 
-	return shared
+	scratch.base = base + uint32(len(tokenized)) + 1
+	if count == 0 {
+		// Nothing survived: point final at an epoch no mark can hold.
+		final = scratch.base
+	}
+	out.final = final
+	return out
 }
 
 func commonCandidate(tok Token, filter staticFilter) bool {
@@ -64,24 +96,27 @@ func commonCandidate(tok Token, filter staticFilter) bool {
 	}
 }
 
-func templatesForCluster(tokenized [][]Token, common map[string]struct{}) []string {
+func templatesForCluster(tokenized [][]Token, tokenIDs [][]uint32, common commonSet) []string {
 	set := make(map[string]struct{}, len(tokenized))
-	for _, toks := range tokenized {
-		template := make([]byte, 0, tokenLength(toks)+8)
+	var buf []byte
+	for i, toks := range tokenized {
+		buf = buf[:0]
 		lastPlaceholder := false
-		for _, tok := range toks {
-			if _, ok := common[tok.Slice]; ok {
-				template = append(template, tok.Slice...)
+		for j, tok := range toks {
+			if common.contains(tokenIDs[i][j]) {
+				buf = append(buf, tok.Slice...)
 				lastPlaceholder = false
 			} else {
 				if lastPlaceholder {
 					continue
 				}
-				template = append(template, "<*>"...)
+				buf = append(buf, "<*>"...)
 				lastPlaceholder = true
 			}
 		}
-		set[string(template)] = struct{}{}
+		if _, ok := set[string(buf)]; !ok {
+			set[string(buf)] = struct{}{}
+		}
 	}
 
 	out := make([]string, 0, len(set))
@@ -92,32 +127,33 @@ func templatesForCluster(tokenized [][]Token, common map[string]struct{}) []stri
 	return out
 }
 
-func parameterMasks(tokenized [][]Token, common map[string]struct{}) []string {
+func parameterMasks(tokenized [][]Token, tokenIDs [][]uint32, common commonSet) []string {
 	masks := make([]string, len(tokenized))
+	var buf []byte
 	for i, toks := range tokenized {
-		mask := make([]byte, 0, tokenLength(toks))
+		total := 0
 		for _, tok := range toks {
-			if _, ok := common[tok.Slice]; ok {
-				appendRepeat(&mask, '0', len(tok.Slice))
-				continue
-			}
-			appendRepeat(&mask, '1', len(tok.Slice))
+			total += len(tok.Slice)
 		}
-		masks[i] = string(mask)
+		if cap(buf) < total {
+			buf = make([]byte, total)
+		} else {
+			buf = buf[:total]
+		}
+		pos := 0
+		for j, tok := range toks {
+			c := byte('1')
+			if common.contains(tokenIDs[i][j]) {
+				c = '0'
+			}
+			end := pos + len(tok.Slice)
+			fill := buf[pos:end]
+			for k := range fill {
+				fill[k] = c
+			}
+			pos = end
+		}
+		masks[i] = string(buf)
 	}
 	return masks
-}
-
-func tokenLength(tokens []Token) int {
-	n := 0
-	for _, tok := range tokens {
-		n += len(tok.Slice)
-	}
-	return n
-}
-
-func appendRepeat(buf *[]byte, b byte, n int) {
-	for i := 0; i < n; i++ {
-		*buf = append(*buf, b)
-	}
 }

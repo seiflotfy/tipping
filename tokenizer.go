@@ -49,11 +49,63 @@ type specialMatcher struct {
 	re      *regexp.Regexp
 }
 
+const (
+	classOther uint8 = iota
+	classSpace
+	classSymbol
+)
+
+// symbolTable is a precomputed byte-class table for ASCII plus a rune-set
+// fallback for non-ASCII symbols. It answers "is this rune a split symbol or
+// whitespace" without map lookups on the ASCII hot path. symLo is the same
+// ASCII symbol set encoded shufti-style for the SIMD kernel: bit (b>>4) of
+// symLo[b&0xF] is set iff byte b is a split symbol.
+type symbolTable struct {
+	class    [128]uint8
+	symLo    [16]byte
+	nonASCII map[rune]struct{}
+}
+
+func newSymbolTable(symbols map[rune]struct{}) *symbolTable {
+	t := &symbolTable{}
+	for b := 0; b < 128; b++ {
+		if asciiSpace(byte(b)) {
+			t.class[b] = classSpace
+		}
+	}
+	for r := range symbols {
+		if r < 128 {
+			if t.class[r] == classOther {
+				t.class[r] = classSymbol
+			}
+			t.symLo[r&0xF] |= 1 << (r >> 4)
+			continue
+		}
+		if t.nonASCII == nil {
+			t.nonASCII = make(map[rune]struct{})
+		}
+		t.nonASCII[r] = struct{}{}
+	}
+	return t
+}
+
+func asciiSpace(b byte) bool {
+	return b == ' ' || b == '\t' || b == '\n' || b == '\v' || b == '\f' || b == '\r'
+}
+
+func (t *symbolTable) isSymbolRune(r rune) bool {
+	if r < 128 {
+		return t.class[r] == classSymbol
+	}
+	_, ok := t.nonASCII[r]
+	return ok
+}
+
 // Tokenizer applies special regex tokenization followed by symbol/whitespace splitting.
 type Tokenizer struct {
 	specialWhites []specialMatcher
 	specialBlacks []specialMatcher
-	symbols       map[rune]struct{}
+	symbols       *symbolTable
 }
 
 type tokenizationScratch struct {
@@ -89,15 +141,15 @@ func NewTokenizer(
 	return &Tokenizer{
 		specialWhites: compileSpecialMatchers(specialWhites),
 		specialBlacks: compileSpecialMatchers(specialBlacks),
-		symbols:       cloneSymbolSet(symbols),
+		symbols:       newSymbolTable(symbols),
 	}
 }
 
-func (t *Tokenizer) cloneWithSymbols(symbols map[rune]struct{}) *Tokenizer {
+func (t *Tokenizer) cloneWithSymbols(symbols *symbolTable) *Tokenizer {
 	return &Tokenizer{
 		specialWhites: append([]specialMatcher(nil), t.specialWhites...),
 		specialBlacks: append([]specialMatcher(nil), t.specialBlacks...),
-		symbols:       cloneSymbolSet(symbols),
+		symbols:       symbols,
 	}
 }
 
@@ -311,7 +363,7 @@ func appendSplitSpecialLiteral(dst []preToken, msg, literal string, kind preToke
 	return dst
 }
 
-func splitToken(msg string, symbols map[rune]struct{}) []Token {
+func splitToken(msg string, symbols *symbolTable) []Token {
 	if msg == "" {
 		return nil
 	}
@@ -319,29 +371,56 @@ func splitToken(msg string, symbols map[rune]struct{}) []Token {
 	return appendSplitToken(tokens, msg, symbols)
 }
 
-func appendSplitToken(tokens []Token, msg string, symbols map[rune]struct{}) []Token {
+func appendSplitToken(tokens []Token, msg string, symbols *symbolTable) []Token {
+	if simdTokenize && len(msg) >= simdMinLen && len(msg) <= simdMaxLen {
+		if out, ok := appendSplitTokenSIMD(tokens, msg, symbols); ok {
+			return out
+		}
+	}
+	return appendSplitTokenScalar(tokens, msg, symbols)
+}
+
+func appendSplitTokenScalar(tokens []Token, msg string, symbols *symbolTable) []Token {
 	if msg == "" {
 		return tokens
 	}
 	start := 0
-	for i, r := range msg {
-		_, isSymbol := symbols[r]
-		if !unicode.IsSpace(r) && !isSymbol {
+	i := 0
+	for i < len(msg) {
+		if b := msg[i]; b < utf8.RuneSelf {
+			cls := symbols.class[b]
+			if cls == classOther {
+				i++
+				continue
+			}
+			if start < i {
+				tokens = append(tokens, tokenWith(msg[start:i], symbols))
+			}
+			kind := TokenSymbolic
+			if cls == classSpace {
+				kind = TokenWhitespace
+			}
+			tokens = append(tokens, Token{Kind: kind, Slice: msg[i : i+1]})
+			i++
+			start = i
+			continue
+		}
+		r, size := utf8.DecodeRuneInString(msg[i:])
+		isSpace := unicode.IsSpace(r)
+		if !isSpace && !symbols.isSymbolRune(r) {
+			i += size
 			continue
 		}
 		if start < i {
 			tokens = append(tokens, tokenWith(msg[start:i], symbols))
 		}
-		size := utf8.RuneLen(r)
-		if size < 0 {
-			size = 1
-		}
 		kind := TokenSymbolic
-		if unicode.IsSpace(r) {
+		if isSpace {
 			kind = TokenWhitespace
 		}
 		tokens = append(tokens, Token{Kind: kind, Slice: msg[i : i+size]})
-		start = i + size
+		i += size
+		start = i
 	}
 
 	if start < len(msg) {
@@ -351,26 +430,38 @@ func appendSplitToken(tokens []Token, msg string, symbols map[rune]struct{}) []T
 	return tokens
 }
 
-func splitTokenCount(msg string, symbols map[rune]struct{}) int {
+func splitTokenCount(msg string, symbols *symbolTable) int {
 	if msg == "" {
 		return 0
 	}
 	count := 0
 	start := 0
-	for i, r := range msg {
-		_, isSymbol := symbols[r]
-		if !unicode.IsSpace(r) && !isSymbol {
+	i := 0
+	for i < len(msg) {
+		if b := msg[i]; b < utf8.RuneSelf {
+			if symbols.class[b] == classOther {
+				i++
+				continue
+			}
+			if start < i {
+				count++
+			}
+			count++
+			i++
+			start = i
+			continue
+		}
+		r, size := utf8.DecodeRuneInString(msg[i:])
+		if !unicode.IsSpace(r) && !symbols.isSymbolRune(r) {
+			i += size
 			continue
 		}
 		if start < i {
 			count++
 		}
 		count++
-		size := utf8.RuneLen(r)
-		if size < 0 {
-			size = 1
-		}
-		start = i + size
+		i += size
+		start = i
 	}
 	if start < len(msg) {
 		count++
@@ -378,7 +469,42 @@ func splitTokenCount(msg string, symbols map[rune]struct{}) int {
 	return count
 }
 
-func tokenWith(slice string, symbols map[rune]struct{}) Token {
+func tokenWith(slice string, symbols *symbolTable) Token {
+	// ASCII fast path: classify with byte checks only.
+	allLetter := true
+	allDigit := true
+	for i := 0; i < len(slice); i++ {
+		b := slice[i]
+		if b >= utf8.RuneSelf {
+			return tokenWithSlow(slice, symbols)
+		}
+		if lower := b | 0x20; lower < 'a' || lower > 'z' {
+			allLetter = false
+		}
+		if b < '0' || b > '9' {
+			allDigit = false
+		}
+	}
+	if len(slice) > 0 {
+		if allLetter {
+			return Token{Kind: TokenAlphabetic, Slice: slice}
+		}
+		if allDigit {
+			return Token{Kind: TokenNumeric, Slice: slice}
+		}
+		if len(slice) == 1 {
+			switch symbols.class[slice[0]] {
+			case classSpace:
+				return Token{Kind: TokenWhitespace, Slice: slice}
+			case classSymbol:
+				return Token{Kind: TokenSymbolic, Slice: slice}
+			}
+		}
+	}
+	return Token{Kind: TokenImpure, Slice: slice}
+}
+
+func tokenWithSlow(slice string, symbols *symbolTable) Token {
 	if isAll(slice, unicode.IsLetter) {
 		return Token{Kind: TokenAlphabetic, Slice: slice}
 	}
@@ -391,7 +517,7 @@ func tokenWith(slice string, symbols map[rune]struct{}) Token {
 		if unicode.IsSpace(r) {
 			return Token{Kind: TokenWhitespace, Slice: slice}
 		}
-		if _, ok := symbols[r]; ok {
+		if symbols.isSymbolRune(r) {
 			return Token{Kind: TokenSymbolic, Slice: slice}
 		}
 	}

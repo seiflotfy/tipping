@@ -1,0 +1,16 @@
+github.com/axiomhq/drain3 v0.0.0-20260721054929-d1ca3e81c2aa h1:SXvIrsTx28awhVyw5E2cnQaZNY55JAIeyf7nVWzFFWY=
+github.com/axiomhq/drain3 v0.0.0-20260721054929-d1ca3e81c2aa/go.mod h1:DN3+PAkpPEO2LsBaxf9Ee4y9dWP50pKCK6SHaQXdp58=
+github.com/bits-and-blooms/bitset v1.24.4 h1:95H15Og1clikBrKr/DuzMXkQzECs1M6hhoGXLwLQOZE=
+github.com/bits-and-blooms/bitset v1.24.4/go.mod h1:7hO7Gc7Pp1vODcmWvKMRA9BNmbv6a/7QIWpPxHddWR8=
+github.com/cespare/xxhash/v2 v2.3.0 h1:UL815xU9SqsFlibzuggzjXhog7bL6oX9BbNZnL2UFvs=
+github.com/cespare/xxhash/v2 v2.3.0/go.mod h1:VGX0DQ3Q6kWi7AoAeZDth3/j3BFtOZR5XLFGgcrjCOs=
+github.com/go-simd/xxhash v0.1.2 h1:FGQreDcFT9PqvR7qVs2JAVvCuPlawLueUc/yL+3VY7E=
+github.com/go-simd/xxhash v0.1.2/go.mod h1:2opEWXq+UqRv2g6RLObNhHCJheRaoLznJ4c+0Nua1qE=
+github.com/klauspost/cpuid/v2 v2.0.9 h1:lgaqFMSdTdQYdZ04uHyN2d/eKdOMyi2YLSvlQIBFYa4=
+github.com/klauspost/cpuid/v2 v2.0.9/go.mod h1:FInQzS24/EEf25PyTYn52gqo7WaD8xa0213Md/qVLRg=
+github.com/lemire/constmap v1.0.1 h1:kiVPkAEYFyKV9QFMo7aWGWc7T4NFyGes4K49PIrHW7k=
+github.com/lemire/constmap v1.0.1/go.mod h1:ypGfd1GuresgQI6Olw7Rgs8kK1CSSeNVtPuSUWg0gnE=
+github.com/zeebo/xxh3 v1.0.2 h1:xZmwmqxHZA8AI603jOQ0tMqmBr9lPeFwGg6d+xy9DC0=
+github.com/zeebo/xxh3 v1.0.2/go.mod h1:5NWz9Sef7zIDm2JHfFlcQvNekmcEl9ekUZQQKCYaDcA=
+golang.org/x/sys v0.47.0 h1:o7XGOvZQCADBQQ4Y7VNq2dRWQR7JmOUW8Kxx4ZsNgWs=
+golang.org/x/sys v0.47.0/go.mod h1:4GL1E5IUh+htKOUEOaiffhrAeqysfVGipDYzABqnCmw=
